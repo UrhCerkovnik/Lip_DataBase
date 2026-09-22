@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -35,7 +37,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -47,6 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,7 +59,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -71,8 +72,9 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.IOException
+import java.io.OutputStreamWriter
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -244,16 +246,29 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
 @Composable
 private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewModel, isAddition: Boolean) {
     var inventoryMenuOpen by remember { mutableStateOf(false) }
-    var scannerVisible by remember { mutableStateOf(false) }
     var manualId by remember { mutableStateOf("") }
     var cameraMessage by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     val pending = remember { mutableStateMapOf<String, Int>() }
+    var cameraPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val requestCameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) scannerVisible = true else cameraMessage = "Camera access is required to scan QR codes."
+        cameraPermissionGranted = granted
+        if (!granted) cameraMessage = "Camera access is required to scan QR codes."
     }
     val selectedInventory = state.inventories.firstOrNull { it.id == state.selectedInventoryId }
+
+    LaunchedEffect(selectedInventory?.id) {
+        if (selectedInventory != null && !cameraPermissionGranted) {
+            requestCameraPermission.launch(Manifest.permission.CAMERA)
+        }
+    }
 
     Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(12.dp))
@@ -281,12 +296,12 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
         Text("Create an inventory on the Inventories tab first.")
     }
     Spacer(Modifier.height(8.dp))
-    Button(
-        onClick = { requestCameraPermission.launch(Manifest.permission.CAMERA) },
-        enabled = selectedInventory != null,
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Text("Scan QR code")
+    if (selectedInventory != null && cameraPermissionGranted) {
+        Text("Camera scanner — scan the next item after the 3-second cooldown.")
+        CameraScanner(
+            onCode = { code -> pending[code] = (pending[code] ?: 0) + 1 },
+            modifier = Modifier.height(220.dp),
+        )
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -338,20 +353,22 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
             Text("Confirm")
         }
     }
-    if (scannerVisible) {
-        QrScannerDialog(
-            onDismiss = { scannerVisible = false },
-            onCode = { code ->
-                pending[code] = (pending[code] ?: 0) + 1
-                scannerVisible = false
-            },
-        )
-    }
 }
 
 @Composable
 private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
     var creatingInventory by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri ->
+        exportMessage = when {
+            uri == null -> "Export canceled."
+            state.selectedInventoryId == null -> "Select an inventory before exporting."
+            else -> exportInventoryCsv(context, uri, state.selectedStock)
+        }
+    }
     Text("Inventories", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(8.dp))
     Button(onClick = { creatingInventory = true }, modifier = Modifier.fillMaxWidth()) {
@@ -376,11 +393,19 @@ private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewM
                                 Text("${item.name} (${item.id}) — ${item.quantity} units")
                             }
                         }
+                        TextButton(
+                            onClick = {
+                                exportLauncher.launch("${safeFileName(inventory.name)}-inventory.csv")
+                            },
+                        ) {
+                            Text("Export for Excel")
+                        }
                     }
                 }
             }
         }
     }
+    exportMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
     if (creatingInventory) {
         NameDialog(
             title = "Create inventory",
@@ -524,25 +549,14 @@ private fun saveQrPng(context: Context, itemId: String, bitmap: Bitmap): String 
 }
 
 @Composable
-private fun QrScannerDialog(onDismiss: () -> Unit, onCode: (String) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Scan an item QR code") },
-        text = { CameraScanner(onCode) },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun CameraScanner(onCode: (String) -> Unit) {
+private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestOnCode by rememberUpdatedState(onCode)
     val previewView = remember { PreviewView(context) }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    val scanned = remember { AtomicBoolean(false) }
+    val nextScanAllowedAt = remember { AtomicLong(0) }
 
     DisposableEffect(lifecycleOwner) {
         val setupCamera = Runnable {
@@ -562,7 +576,13 @@ private fun CameraScanner(onCode: (String) -> Unit) {
                     scanner.process(InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees))
                         .addOnSuccessListener { codes ->
                             codes.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue?.let { value ->
-                                if (scanned.compareAndSet(false, true)) latestOnCode(value)
+                                val now = SystemClock.elapsedRealtime()
+                                val nextAllowed = nextScanAllowedAt.get()
+                                if (now >= nextAllowed &&
+                                    nextScanAllowedAt.compareAndSet(nextAllowed, now + SCAN_COOLDOWN_MILLIS)
+                                ) {
+                                    latestOnCode(value)
+                                }
                             }
                         }
                         .addOnCompleteListener { imageProxy.close() }
@@ -577,5 +597,39 @@ private fun CameraScanner(onCode: (String) -> Unit) {
             cameraExecutor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(360.dp))
+    AndroidView(factory = { previewView }, modifier = modifier.fillMaxWidth())
 }
+
+private fun exportInventoryCsv(context: Context, uri: Uri, stock: List<InventoryItem>): String {
+    return try {
+    context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+        OutputStreamWriter(outputStream, Charsets.UTF_8).use { writer ->
+            writer.append('\uFEFF')
+            writer.appendLine("Item ID,Name,Quantity,Weight per unit (kg),Origin,Total weight (kg)")
+            stock.forEach { item ->
+                writer.appendLine(
+                    listOf(
+                        item.id,
+                        item.name,
+                        item.quantity.toString(),
+                        item.weightKg.toString(),
+                        item.origin,
+                        (item.quantity * item.weightKg).toString(),
+                    ).joinToString(",") { csvField(it) },
+                )
+            }
+        }
+    } ?: return "Could not create the export file."
+    "Excel-ready inventory spreadsheet exported."
+    } catch (_: IOException) {
+        "Could not export the inventory spreadsheet."
+    } catch (_: SecurityException) {
+        "Storage access was denied."
+    }
+}
+
+private fun csvField(value: String): String = "\"${value.replace("\"", "\"\"")}\""
+
+private fun safeFileName(name: String): String = name.replace(Regex("""[\\/:*?"<>|]"""), "_")
+
+private const val SCAN_COOLDOWN_MILLIS = 3_000L
