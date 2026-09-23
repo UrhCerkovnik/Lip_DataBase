@@ -487,17 +487,36 @@ private fun ColumnScope.SyncScreen(state: InventoryUiState, viewModel: Inventory
     var pin by remember { mutableStateOf("") }
     var smNumber by remember { mutableStateOf("") }
     var smPin by remember { mutableStateOf("") }
-    Text("Cloud sync", style = MaterialTheme.typography.headlineSmall)
-    Text(state.cloud.status, color = MaterialTheme.colorScheme.primary)
-    Spacer(Modifier.height(12.dp))
-    Text("Company workspace connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    OutlinedButton(onClick = viewModel::syncNow, modifier = Modifier.fillMaxWidth()) { Text("Sync now") }
-    Spacer(Modifier.height(20.dp))
     if (state.cloud.isLocked) {
-        Text("Unlock inventory", style = MaterialTheme.typography.titleMedium)
-        Text("Enter the master PIN or an SM PIN.")
-        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(4) }, label = { Text("PIN") }, singleLine = true)
-        Button(onClick = { viewModel.unlock(pin); pin = "" }) { Text("Unlock") }
+        Spacer(Modifier.weight(1f))
+        Text(
+            "Lip - DataBase",
+            style = MaterialTheme.typography.headlineLarge,
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        )
+        Spacer(Modifier.height(32.dp))
+        OutlinedTextField(
+            value = pin,
+            onValueChange = { pin = it.filter(Char::isDigit).take(4) },
+            label = { Text("PIN") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+        Button(
+            onClick = { viewModel.unlock(pin); pin = "" },
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+        ) {
+            Text("Log in")
+        }
+        state.cloud.status.takeIf { it != "Cloud sync active" }?.let {
+            Text(
+                it,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+        }
+        Spacer(Modifier.weight(1f))
     } else {
         Text(
             if (state.cloud.isMasterUnlocked) "Master access is unlocked." else "Restricted to SM ${state.cloud.unlockedSmNumber}.",
@@ -512,11 +531,6 @@ private fun ColumnScope.SyncScreen(state: InventoryUiState, viewModel: Inventory
             Button(onClick = { viewModel.setSmPin(smNumber, smPin); smPin = "" }) { Text("Save SM PIN") }
         }
     }
-    Spacer(Modifier.height(16.dp))
-    Text(
-        "Prototype warning: PIN enforcement is client-side only. It is not access control on the Firebase free plan.",
-        color = MaterialTheme.colorScheme.error,
-    )
 }
 
 @Composable
