@@ -258,6 +258,7 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
         if (granted) scannerVisible = true else cameraMessage = "Camera access is required to scan QR codes."
     }
     val selectedInventory = state.inventories.firstOrNull { it.id == state.selectedInventoryId }
+    val catalogById = state.catalogItems.associateBy(CatalogItem::id)
 
     Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(12.dp))
@@ -315,7 +316,11 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
     LazyColumn(modifier = Modifier.height(260.dp)) {
         items(pending.keys.toList(), key = { it }) { itemId ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text(itemId, modifier = Modifier.weight(1f))
+                val item = catalogById[itemId]
+                Text(
+                    text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
+                    modifier = Modifier.weight(1f),
+                )
                 OutlinedTextField(
                     value = pending[itemId].toString(),
                     onValueChange = { value -> value.toIntOrNull()?.let { pending[itemId] = it } },
