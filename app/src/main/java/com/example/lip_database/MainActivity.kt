@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.provider.MediaStore
@@ -86,6 +87,10 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.IOException
+import java.io.OutputStreamWriter
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
@@ -383,6 +388,17 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
 
 @Composable
 private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
+    val context = LocalContext.current
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv"),
+    ) { uri ->
+        exportMessage = when {
+            uri == null -> "Export canceled."
+            state.selectedInventoryId == null -> "Select an inventory before exporting."
+            else -> exportInventoryCsv(context, uri, state.selectedStock)
+        }
+    }
     Text("Inventories", style = MaterialTheme.typography.headlineSmall)
     Text("Inventories are created automatically from an item's storage name and SM number.")
     Spacer(Modifier.height(12.dp))
@@ -404,11 +420,19 @@ private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: In
                                 Text("${item.name} - ${item.storage} — ${item.quantity} units")
                             }
                         }
+                        TextButton(
+                            onClick = {
+                                exportLauncher.launch("${safeFileName(inventory.name)}-inventory.csv")
+                            },
+                        ) {
+                            Text("Export for Excel")
+                        }
                     }
                 }
             }
         }
     }
+    exportMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
 }
 
 @Composable
@@ -564,6 +588,41 @@ private fun saveQrPng(context: Context, itemName: String, smNumber: String, bitm
 }
 
 private fun safeFileName(value: String): String = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
+
+private fun exportInventoryCsv(context: Context, uri: Uri, stock: List<InventoryItem>): String {
+    return try {
+        context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+            OutputStreamWriter(outputStream, Charsets.UTF_8).use { writer ->
+                writer.append('\uFEFF')
+                writer.appendLine("Name,Storage,SM number,Quantity,Weight per unit (kg),Last added")
+                stock.forEach { item ->
+                    writer.appendLine(
+                        listOf(
+                            item.name,
+                            item.storage,
+                            item.smNumber,
+                            item.quantity.toString(),
+                            item.weightKg.toString(),
+                            item.lastAddedAt?.let(::formatSpreadsheetTimestamp).orEmpty(),
+                        ).joinToString(",") { csvField(it) },
+                    )
+                }
+            }
+        } ?: return "Could not create the export file."
+        "Excel-ready inventory spreadsheet exported."
+    } catch (_: IOException) {
+        "Could not export the inventory spreadsheet."
+    } catch (_: SecurityException) {
+        "Storage access was denied."
+    }
+}
+
+private fun csvField(value: String): String = "\"${value.replace("\"", "\"\"")}\""
+
+private fun formatSpreadsheetTimestamp(timestamp: Long): String =
+    DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        .withZone(ZoneId.systemDefault())
+        .format(Instant.ofEpochMilli(timestamp))
 
 @Composable
 private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {

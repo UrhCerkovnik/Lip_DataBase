@@ -15,6 +15,7 @@ data class InventoryItem(
     val storage: String,
     val smNumber: String,
     val quantity: Int,
+    val lastAddedAt: Long?,
 )
 
 data class CatalogItem(
@@ -60,11 +61,15 @@ class InventoryDatabase(context: Context) :
             )
             """.trimIndent(),
         )
+        createStockMovementsTable(database)
     }
 
     override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             database.execSQL("ALTER TABLE items ADD COLUMN sm_number TEXT NOT NULL DEFAULT ''")
+        }
+        if (oldVersion < 3) {
+            createStockMovementsTable(database)
         }
     }
 
@@ -98,7 +103,20 @@ class InventoryDatabase(context: Context) :
 
     fun stock(inventoryId: Long): List<InventoryItem> = readableDatabase.rawQuery(
         """
-        SELECT i.id, i.name, i.weight_kg, i.origin, i.sm_number, s.quantity
+        SELECT
+            i.id,
+            i.name,
+            i.weight_kg,
+            i.origin,
+            i.sm_number,
+            s.quantity,
+            (
+                SELECT MAX(m.occurred_at)
+                FROM stock_movements m
+                WHERE m.inventory_id = s.inventory_id
+                    AND m.item_id = s.item_id
+                    AND m.action = 'ADD'
+            )
         FROM stock s
         JOIN items i ON i.id = s.item_id
         WHERE s.inventory_id = ? AND s.quantity > 0
@@ -116,6 +134,7 @@ class InventoryDatabase(context: Context) :
                         cursor.getString(3),
                         cursor.getString(4),
                         cursor.getInt(5),
+                        cursor.takeIf { !it.isNull(6) }?.getLong(6),
                     ),
                 )
             }
@@ -217,6 +236,13 @@ class InventoryDatabase(context: Context) :
                         SQLiteDatabase.CONFLICT_REPLACE,
                     )
                 }
+                database.insertOrThrow("stock_movements", null, ContentValues().apply {
+                    put("inventory_id", inventoryId)
+                    put("item_id", itemId)
+                    put("quantity", quantity)
+                    put("action", if (isAddition) ACTION_ADD else ACTION_REMOVE)
+                    put("occurred_at", System.currentTimeMillis())
+                })
             }
             database.setTransactionSuccessful()
             null
@@ -227,7 +253,26 @@ class InventoryDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "inventory.db"
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
+        private const val ACTION_ADD = "ADD"
+        private const val ACTION_REMOVE = "REMOVE"
+
+        private fun createStockMovementsTable(database: SQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TABLE stock_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    inventory_id INTEGER NOT NULL,
+                    item_id TEXT NOT NULL,
+                    quantity INTEGER NOT NULL,
+                    action TEXT NOT NULL CHECK (action IN ('ADD', 'REMOVE')),
+                    occurred_at INTEGER NOT NULL,
+                    FOREIGN KEY (inventory_id) REFERENCES inventories(id),
+                    FOREIGN KEY (item_id) REFERENCES items(id)
+                )
+                """.trimIndent(),
+            )
+        }
 
         fun inventoryName(storage: String, smNumber: String): String =
             "${storage.trim()} - ${smNumber.trim()}"
