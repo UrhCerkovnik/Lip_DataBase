@@ -511,13 +511,13 @@ private fun createStickerBitmap(item: CatalogItem): Bitmap {
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
     }
-    centeredPaint.textSize = 82f
-    canvas.drawText(item.name.uppercase(), width / 2f, 150f, centeredPaint)
-    centeredPaint.textSize = 42f
-    canvas.drawText(item.storage.uppercase(), width / 2f, 220f, centeredPaint)
+    val qr = createQrBitmap(item.id, 320)
+    canvas.drawBitmap(qr, (width - qr.width) / 2f, 35f, null)
 
-    val qr = createQrBitmap(item.id, 250)
-    canvas.drawBitmap(qr, 875f, 270f, null)
+    centeredPaint.textSize = 90f
+    canvas.drawText(item.name.uppercase(), width / 2f, 465f, centeredPaint)
+    centeredPaint.textSize = 48f
+    canvas.drawText(item.storage.uppercase(), width / 2f, 535f, centeredPaint)
 
     val cornerPaint = Paint(centeredPaint).apply {
         textAlign = Paint.Align.LEFT
