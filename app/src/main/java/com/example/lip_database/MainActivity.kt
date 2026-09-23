@@ -354,51 +354,36 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
 
     Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(12.dp))
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(1f)
-            .clipToBounds(),
-    ) {
-        if (cameraPermissionGranted) {
-            CameraScanner(
-                onCode = { code ->
-                    val quantity = (pending[code] ?: 0) + 1
-                    pending[code] = quantity
-                    quantityText[code] = quantity.toString()
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {}
+    Box {
+        OutlinedButton(onClick = { inventoryMenuOpen = true }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+            Text(selectedInventory?.name ?: "Select inventory", style = MaterialTheme.typography.titleMedium)
         }
-        Box(modifier = Modifier.padding(12.dp)) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                tonalElevation = 4.dp,
-            ) {
-                OutlinedButton(onClick = { inventoryMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(selectedInventory?.name ?: "Select inventory")
-                }
-            }
-            androidx.compose.material3.DropdownMenu(
-                expanded = inventoryMenuOpen,
-                onDismissRequest = { inventoryMenuOpen = false },
-            ) {
-                visibleInventories.forEach { inventory ->
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = { Text(inventory.name) },
-                        onClick = {
-                            viewModel.selectInventory(inventory.id)
-                            inventoryMenuOpen = false
-                            pending.clear()
-                            quantityText.clear()
-                        },
-                    )
-                }
+        androidx.compose.material3.DropdownMenu(
+            expanded = inventoryMenuOpen,
+            onDismissRequest = { inventoryMenuOpen = false },
+        ) {
+            visibleInventories.forEach { inventory ->
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(inventory.name) },
+                    onClick = {
+                        viewModel.selectInventory(inventory.id)
+                        inventoryMenuOpen = false
+                        pending.clear()
+                        quantityText.clear()
+                    },
+                )
             }
         }
+    }
+    if (cameraPermissionGranted) {
+        CameraScanner(
+            onCode = { code ->
+                val quantity = (pending[code] ?: 0) + 1
+                pending[code] = quantity
+                quantityText[code] = quantity.toString()
+            },
+            showPreview = false,
+        )
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     Spacer(Modifier.height(12.dp))
@@ -414,17 +399,22 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
             } else {
                 LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
                     items(pending.keys.toList(), key = { it }) { itemId ->
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            ) {
                             val item = catalogById[itemId]
-                            Text(
-                                text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
-                                modifier = Modifier.weight(1f),
-                            )
-                            Text(
-                                text = "In: ${currentStockById[itemId]?.quantity ?: 0}",
-                                style = MaterialTheme.typography.labelMedium,
-                                modifier = Modifier.padding(horizontal = 4.dp),
-                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                                Text(
+                                    text = "In inventory: ${currentStockById[itemId]?.quantity ?: 0}",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                )
+                            }
                             OutlinedTextField(
                                 value = quantityText[itemId] ?: pending[itemId].toString(),
                                 onValueChange = { value ->
@@ -434,15 +424,12 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
                                     }
                                 },
                                 label = { Text("Qty") },
-                                modifier = Modifier.width(96.dp),
+                                modifier = Modifier.width(104.dp),
+                                textStyle = MaterialTheme.typography.titleLarge,
                                 singleLine = true,
                             )
-                            TextButton(onClick = {
-                                pending.remove(itemId)
-                                quantityText.remove(itemId)
-                            }) { Text("Remove") }
+                            }
                         }
-                        HorizontalDivider()
                     }
                 }
             }
@@ -808,7 +795,11 @@ private fun formatSpreadsheetTimestamp(timestamp: Long): String =
         .format(Instant.ofEpochMilli(timestamp))
 
 @Composable
-private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
+private fun CameraScanner(
+    onCode: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    showPreview: Boolean = true,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestOnCode by rememberUpdatedState(onCode)
@@ -858,7 +849,11 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
                 }
             }
             cameraProvider.unbindAll()
-            cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            if (showPreview) {
+                cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+            } else {
+                cameraProvider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
+            }
         }
         cameraProviderFuture.addListener(setupCamera, ContextCompat.getMainExecutor(context))
         onDispose {
@@ -866,7 +861,9 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
             cameraExecutor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = modifier.clipToBounds())
+    if (showPreview) {
+        AndroidView(factory = { previewView }, modifier = modifier.clipToBounds())
+    }
 }
 
 private const val SCAN_COOLDOWN_MILLIS = 2_000L
