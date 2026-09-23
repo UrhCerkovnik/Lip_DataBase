@@ -161,6 +161,18 @@ class CloudSyncManager(
         }
     }
 
+    fun deleteCatalogItem(itemId: String) {
+        scope.launch {
+            try {
+                workspaceDocument().collection("catalog").document(itemId).delete().await()
+                uploadSnapshot(database.snapshot(), pruneRemovedDocuments = true)
+                setState { it.copy(status = "Cloud sync active") }
+            } catch (error: Exception) {
+                setState { it.copy(status = "Could not delete item from cloud: ${error.message ?: "check connection"}") }
+            }
+        }
+    }
+
     private suspend fun synchronize() {
         val remote = readRemote()
         val local = database.snapshot()

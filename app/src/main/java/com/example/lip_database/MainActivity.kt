@@ -170,7 +170,7 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             if (error == null) {
                 state = state.copy(message = "Item deleted.")
                 refresh()
-                cloudSync.publishLocalChanges()
+                cloudSync.deleteCatalogItem(id)
             } else {
                 state = state.copy(message = error)
             }
