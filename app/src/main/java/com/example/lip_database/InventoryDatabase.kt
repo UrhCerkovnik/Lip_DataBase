@@ -176,14 +176,16 @@ class InventoryDatabase(context: Context) :
                     "SELECT 1 FROM items WHERE id = ?",
                     arrayOf(itemId),
                 ).use { it.moveToFirst() }
-                if (!exists) return "No catalog item has ID $itemId."
+                if (!exists) return "A scanned QR code does not match any catalog item."
 
                 val currentQuantity = database.rawQuery(
                     "SELECT quantity FROM stock WHERE inventory_id = ? AND item_id = ?",
                     arrayOf(inventoryId.toString(), itemId),
                 ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) else 0 }
                 val updatedQuantity = if (isAddition) currentQuantity + quantity else currentQuantity - quantity
-                if (updatedQuantity < 0) return "Cannot remove $quantity of $itemId; only $currentQuantity is stored."
+                if (updatedQuantity < 0) {
+                    return "Cannot remove $quantity item(s); only $currentQuantity are stored."
+                }
 
                 if (updatedQuantity == 0) {
                     database.delete(

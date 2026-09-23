@@ -249,7 +249,6 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
 private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewModel, isAddition: Boolean) {
     var inventoryMenuOpen by remember { mutableStateOf(false) }
     var scannerVisible by remember { mutableStateOf(false) }
-    var manualId by remember { mutableStateOf("") }
     var cameraMessage by remember { mutableStateOf<String?>(null) }
     val pending = remember { mutableStateMapOf<String, Int>() }
     val requestCameraPermission = rememberLauncherForActivityResult(
@@ -294,24 +293,6 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
         Text("Scan QR code")
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = manualId,
-            onValueChange = { manualId = it },
-            label = { Text("Item ID (manual test)") },
-            modifier = Modifier.width(220.dp),
-            singleLine = true,
-        )
-        Spacer(Modifier.width(8.dp))
-        Button(onClick = {
-            val id = manualId.trim()
-            if (id.isNotEmpty()) {
-                pending[id] = (pending[id] ?: 0) + 1
-                manualId = ""
-            }
-        }) { Text("Add") }
-    }
-    Spacer(Modifier.height(12.dp))
     Text("Items waiting for confirmation", style = MaterialTheme.typography.titleMedium)
     LazyColumn(modifier = Modifier.height(260.dp)) {
         items(pending.keys.toList(), key = { it }) { itemId ->
@@ -382,7 +363,7 @@ private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewM
                             Text("This inventory is empty.")
                         } else {
                             state.selectedStock.forEach { item ->
-                                Text("${item.name} (${item.id}) — ${item.quantity} units")
+                                Text("${item.name} - ${item.storage} — ${item.quantity} units")
                             }
                         }
                     }
@@ -492,12 +473,11 @@ private fun QrStickerDialog(item: CatalogItem, onDismiss: () -> Unit) {
                     contentDescription = "Sticker for ${item.name}",
                     modifier = Modifier.fillMaxWidth().height(180.dp),
                 )
-                Text("QR ID: ${item.id}")
                 resultMessage?.let { Text(it) }
             }
         },
         confirmButton = {
-            TextButton(onClick = { resultMessage = saveQrPng(context, item.id, bitmap) }) {
+            TextButton(onClick = { resultMessage = saveQrPng(context, item.name, item.smNumber, bitmap) }) {
                 Text("Save PNG")
             }
         },
@@ -545,13 +525,14 @@ private fun createQrBitmap(value: String, size: Int): Bitmap {
     }
 }
 
-private fun saveQrPng(context: Context, itemId: String, bitmap: Bitmap): String {
+private fun saveQrPng(context: Context, itemName: String, smNumber: String, bitmap: Bitmap): String {
     return try {
     val values = ContentValues().apply {
-        put(MediaStore.Images.Media.DISPLAY_NAME, "qr-$itemId.png")
+        put(MediaStore.Images.Media.DISPLAY_NAME, "${safeFileName(itemName)}-$smNumber.png")
         put(MediaStore.Images.Media.MIME_TYPE, "image/png")
         put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/QR Inventory")
     }
+
     val uri = context.contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
         ?: return "Could not create the PNG file."
     context.contentResolver.openOutputStream(uri)?.use {
@@ -564,6 +545,8 @@ private fun saveQrPng(context: Context, itemId: String, bitmap: Bitmap): String 
         "Storage permission was denied."
     }
 }
+
+private fun safeFileName(value: String): String = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
 
 @Composable
 private fun QrScannerDialog(onDismiss: () -> Unit, onCode: (String) -> Unit) {
