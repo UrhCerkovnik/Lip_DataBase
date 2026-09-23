@@ -233,6 +233,10 @@ class CloudSyncManager(
             root.collection("catalog").get().await().documents
                 .filter { it.id !in catalogIds }
                 .forEach { batch.delete(it.reference) }
+            val inventoryIds = snapshot.inventories.mapTo(mutableSetOf()) { documentId(it.name) }
+            root.collection("inventories").get().await().documents
+                .filter { it.id !in inventoryIds }
+                .forEach { batch.delete(it.reference) }
             val stockIds = snapshot.stock.mapTo(mutableSetOf()) { documentId("${it.inventoryName}|${it.itemId}") }
             root.collection("stock").get().await().documents
                 .filter { it.id !in stockIds }
