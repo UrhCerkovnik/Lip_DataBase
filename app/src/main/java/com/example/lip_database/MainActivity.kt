@@ -26,6 +26,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,6 +42,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -64,6 +66,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.AddCircle
+import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -208,7 +216,7 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
                     NavigationBarItem(
                         selected = selectedTab == tab,
                         onClick = { selectedTab = tab },
-                        icon = { Text(tab.label.take(1)) },
+                        icon = { AppTabIcon(tab) },
                         label = { Text(tab.label) },
                     )
                 }
@@ -236,7 +244,18 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
 }
 
 @Composable
-private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewModel, isAddition: Boolean) {
+private fun AppTabIcon(tab: AppTab) {
+    val (imageVector, description) = when (tab) {
+        AppTab.ADD -> Icons.Filled.AddCircle to "Add"
+        AppTab.REMOVE -> Icons.Filled.RemoveCircle to "Remove"
+        AppTab.INVENTORIES -> Icons.AutoMirrored.Filled.FormatListBulleted to "Inventories"
+        AppTab.STICKERS -> Icons.Filled.QrCode2 to "Stickers"
+    }
+    Icon(imageVector, contentDescription = description)
+}
+
+@Composable
+private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: InventoryViewModel, isAddition: Boolean) {
     var inventoryMenuOpen by remember { mutableStateOf(false) }
     var scannerVisible by remember { mutableStateOf(false) }
     var cameraMessage by remember { mutableStateOf<String?>(null) }
@@ -249,7 +268,11 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
     val selectedInventory = state.inventories.firstOrNull { it.id == state.selectedInventoryId }
     val catalogById = state.catalogItems.associateBy(CatalogItem::id)
 
-    Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
+    Text(
+        if (isAddition) "Add items" else "Remove items",
+        style = MaterialTheme.typography.headlineSmall,
+    )
+    Text("Choose an SM inventory, scan its QR stickers, then confirm the batch.")
     Spacer(Modifier.height(12.dp))
     Box {
         OutlinedButton(onClick = { inventoryMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
@@ -278,13 +301,16 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
     Button(
         onClick = { requestCameraPermission.launch(Manifest.permission.CAMERA) },
         enabled = selectedInventory != null,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().height(52.dp),
     ) {
+        Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
         Text("Scan QR code")
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    Spacer(Modifier.height(12.dp))
     Text("Items waiting for confirmation", style = MaterialTheme.typography.titleMedium)
-    LazyColumn(modifier = Modifier.height(260.dp)) {
+    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
         items(pending.keys.toList(), key = { it }) { itemId ->
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 val item = catalogById[itemId]
@@ -304,8 +330,13 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
             HorizontalDivider()
         }
     }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        OutlinedButton(onClick = { pending.clear() }, modifier = Modifier.width(140.dp)) { Text("Cancel") }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+    ) {
+        OutlinedButton(onClick = { pending.clear() }, modifier = Modifier.weight(1f).height(52.dp)) {
+            Text("Cancel")
+        }
         Button(
             onClick = {
                 state.selectedInventoryId?.let { inventoryId ->
@@ -313,7 +344,7 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
                 }
             },
             enabled = selectedInventory != null && pending.isNotEmpty(),
-            modifier = Modifier.width(140.dp),
+            modifier = Modifier.weight(1f).height(52.dp),
         ) {
             Text("Confirm")
         }
@@ -330,11 +361,11 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
 }
 
 @Composable
-private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
     Text("Inventories", style = MaterialTheme.typography.headlineSmall)
     Text("Inventories are created automatically from an item's storage name and SM number.")
     Spacer(Modifier.height(12.dp))
-    LazyColumn(modifier = Modifier.height(440.dp)) {
+    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
         items(state.inventories, key = Inventory::id) { inventory ->
             Card(
                 modifier = Modifier
@@ -360,17 +391,19 @@ private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewM
 }
 
 @Composable
-private fun StickersScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
+private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
     var addingItem by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<CatalogItem?>(null) }
     Text("Sticker catalog", style = MaterialTheme.typography.headlineSmall)
     Text("Create each box/item once, then generate a QR label from its ID.")
     Spacer(Modifier.height(8.dp))
-    Button(onClick = { addingItem = true }, modifier = Modifier.fillMaxWidth()) {
+    Button(onClick = { addingItem = true }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+        Icon(Icons.Filled.AddCircle, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
         Text("Add catalog item")
     }
     Spacer(Modifier.height(12.dp))
-    LazyColumn(modifier = Modifier.height(440.dp)) {
+    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
         items(state.catalogItems, key = CatalogItem::id) { item ->
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
