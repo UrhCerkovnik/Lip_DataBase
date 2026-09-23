@@ -327,6 +327,7 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
     var cameraMessage by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val pending = remember { mutableStateMapOf<String, Int>() }
+    val quantityText = remember { mutableStateMapOf<String, String>() }
     var cameraPermissionGranted by remember {
         mutableStateOf(
             ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
@@ -345,6 +346,7 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
     }
     val selectedInventory = visibleInventories.firstOrNull { it.id == state.selectedInventoryId }
     val catalogById = state.catalogItems.filter { viewModel.hasAccessTo(it.smNumber) }.associateBy(CatalogItem::id)
+    val currentStockById = state.selectedStock.associateBy(InventoryItem::id)
 
     LaunchedEffect(Unit) {
         if (!cameraPermissionGranted) requestCameraPermission.launch(Manifest.permission.CAMERA)
@@ -360,7 +362,11 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
     ) {
         if (cameraPermissionGranted) {
             CameraScanner(
-                onCode = { code -> pending[code] = (pending[code] ?: 0) + 1 },
+                onCode = { code ->
+                    val quantity = (pending[code] ?: 0) + 1
+                    pending[code] = quantity
+                    quantityText[code] = quantity.toString()
+                },
                 modifier = Modifier.fillMaxSize(),
             )
         } else {
@@ -387,6 +393,7 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
                             viewModel.selectInventory(inventory.id)
                             inventoryMenuOpen = false
                             pending.clear()
+                            quantityText.clear()
                         },
                     )
                 }
@@ -413,14 +420,27 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
                                 text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
                                 modifier = Modifier.weight(1f),
                             )
+                            Text(
+                                text = "In: ${currentStockById[itemId]?.quantity ?: 0}",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                            )
                             OutlinedTextField(
-                                value = pending[itemId].toString(),
-                                onValueChange = { value -> value.toIntOrNull()?.let { pending[itemId] = it } },
+                                value = quantityText[itemId] ?: pending[itemId].toString(),
+                                onValueChange = { value ->
+                                    if (value.all(Char::isDigit)) {
+                                        quantityText[itemId] = value
+                                        value.toIntOrNull()?.let { pending[itemId] = it }
+                                    }
+                                },
                                 label = { Text("Qty") },
                                 modifier = Modifier.width(96.dp),
                                 singleLine = true,
                             )
-                            TextButton(onClick = { pending.remove(itemId) }) { Text("Remove") }
+                            TextButton(onClick = {
+                                pending.remove(itemId)
+                                quantityText.remove(itemId)
+                            }) { Text("Remove") }
                         }
                         HorizontalDivider()
                     }
@@ -432,16 +452,25 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     ) {
-        OutlinedButton(onClick = { pending.clear() }, modifier = Modifier.weight(1f).height(52.dp)) {
+        OutlinedButton(onClick = {
+            pending.clear()
+            quantityText.clear()
+        }, modifier = Modifier.weight(1f).height(52.dp)) {
             Text("Cancel")
         }
         Button(
             onClick = {
                 state.selectedInventoryId?.let { inventoryId ->
-                    viewModel.recordChange(inventoryId, pending.toMap(), isAddition) { pending.clear() }
+                    val quantities = pending.mapValues { (itemId, _) -> quantityText[itemId]!!.toInt() }
+                    viewModel.recordChange(inventoryId, quantities, isAddition) {
+                        pending.clear()
+                        quantityText.clear()
+                    }
                 }
             },
-            enabled = selectedInventory != null && pending.isNotEmpty(),
+            enabled = selectedInventory != null &&
+                pending.isNotEmpty() &&
+                pending.keys.all { quantityText[it]?.toIntOrNull()?.let { quantity -> quantity > 0 } == true },
             modifier = Modifier.weight(1f).height(52.dp),
         ) {
             Text("Confirm")
