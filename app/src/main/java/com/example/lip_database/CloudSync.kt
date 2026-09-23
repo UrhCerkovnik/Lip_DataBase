@@ -266,8 +266,20 @@ class CloudSyncManager(
     private suspend fun refreshSettings() {
         val settings = settingsDocument()
         firestore.runTransaction { transaction ->
-            if (transaction.get(settings).getString("masterPinHash") == null) {
-                transaction.set(settings, mapOf("masterPinHash" to hashPin(DEFAULT_MASTER_PIN)))
+            val snapshot = transaction.get(settings)
+            val existingPins = snapshot.get("smPins") as? Map<*, *> ?: emptyMap<Any, Any>()
+            val missingPins = DEFAULT_SM_NUMBERS
+                .filterNot(existingPins::containsKey)
+                .associateWith { smNumber -> hashPin(smNumber.padStart(4, '0')) }
+            if (snapshot.getString("masterPinHash") == null || missingPins.isNotEmpty()) {
+                transaction.set(
+                    settings,
+                    mapOf(
+                        "masterPinHash" to (snapshot.getString("masterPinHash") ?: hashPin(DEFAULT_MASTER_PIN)),
+                        "smPins" to missingPins,
+                    ),
+                    com.google.firebase.firestore.SetOptions.merge(),
+                )
             }
         }.await()
         val configured = true
@@ -297,6 +309,12 @@ class CloudSyncManager(
         private const val COMPANY_WORKSPACE_ID = "lip-database-company"
         private const val DEFAULT_MASTER_PIN = "0000"
         private const val PERIODIC_SYNC_MILLIS = 10_000L
+        private val DEFAULT_SM_NUMBERS = listOf(
+            "201", "202", "206", "210", "211", "212", "213", "214", "215", "216",
+            "230", "2301", "233", "234", "235", "237", "238", "239", "261", "265",
+            "266", "30", "501", "505", "516", "517", "519", "521", "522", "523",
+            "60", "601", "61", "63", "68", "81", "86", "87", "98",
+        )
 
         internal fun hashPin(pin: String): String =
             MessageDigest.getInstance("SHA-256").digest(pin.toByteArray()).joinToString("") { "%02x".format(it) }
