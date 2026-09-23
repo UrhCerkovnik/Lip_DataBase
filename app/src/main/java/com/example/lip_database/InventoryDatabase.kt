@@ -334,7 +334,7 @@ class InventoryDatabase(context: Context) :
         return InventorySnapshot(inventories, catalog, stock, movements)
     }
 
-    /** Remote stock is authoritative for records it contains; local-only records stay intact. */
+    /** Replaces the local snapshot with Firebase's authoritative workspace state. */
     fun mergeRemote(
         remoteCatalog: List<CatalogItem>,
         remoteInventories: List<String>,
@@ -344,6 +344,10 @@ class InventoryDatabase(context: Context) :
         val database = writableDatabase
         database.beginTransaction()
         try {
+            database.delete("stock_movements", null, null)
+            database.delete("stock", null, null)
+            database.delete("items", null, null)
+            database.delete("inventories", null, null)
             remoteInventories.forEach { name ->
                 database.insertWithOnConflict(
                     "inventories", null, ContentValues().apply { put("name", name) }, SQLiteDatabase.CONFLICT_IGNORE,

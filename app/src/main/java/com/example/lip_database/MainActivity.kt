@@ -156,8 +156,9 @@ private class InventoryViewModel(context: Context) : ViewModel() {
                         "Item added. ${InventoryDatabase.inventoryName(storage, smNumber)} is ready to use."
                     },
                 )
+                val snapshot = withContext(Dispatchers.IO) { database.snapshot() }
+                cloudSync.publishLocalChanges(snapshot)
                 refresh()
-                cloudSync.publishLocalChanges()
             } else {
                 state = state.copy(message = error)
             }
@@ -169,8 +170,9 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             val error = withContext(Dispatchers.IO) { database.deleteItem(id) }
             if (error == null) {
                 state = state.copy(message = "Item deleted.")
+                val snapshot = withContext(Dispatchers.IO) { database.snapshot() }
+                cloudSync.deleteCatalogItem(id, snapshot)
                 refresh()
-                cloudSync.deleteCatalogItem(id)
             } else {
                 state = state.copy(message = error)
             }
@@ -182,7 +184,8 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             val error = withContext(Dispatchers.IO) { database.deleteEmptyInventory(inventoryId) }
             if (error == null) {
                 state = state.copy(message = "Empty inventory deleted.")
-                cloudSync.publishLocalChanges()
+                val snapshot = withContext(Dispatchers.IO) { database.snapshot() }
+                cloudSync.publishLocalChanges(snapshot)
                 refresh()
             } else {
                 state = state.copy(message = error)
@@ -198,8 +201,9 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             if (error == null) {
                 state = state.copy(message = if (isAddition) "Items added to inventory." else "Items removed from inventory.")
                 onSuccess()
+                val snapshot = withContext(Dispatchers.IO) { database.snapshot() }
+                cloudSync.publishLocalChanges(snapshot)
                 refresh()
-                cloudSync.publishLocalChanges()
             } else {
                 state = state.copy(message = error)
             }

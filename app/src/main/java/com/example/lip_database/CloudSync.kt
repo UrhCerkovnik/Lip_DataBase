@@ -150,10 +150,10 @@ class CloudSyncManager(
 
     fun allowedSmNumber(): String? = currentState.unlockedSmNumber
 
-    fun publishLocalChanges() {
+    fun publishLocalChanges(snapshot: InventorySnapshot) {
         scope.launch {
             try {
-                uploadSnapshot(database.snapshot(), pruneRemovedDocuments = true)
+                uploadSnapshot(snapshot, pruneRemovedDocuments = true)
                 setState { it.copy(status = "Cloud sync active") }
             } catch (error: Exception) {
                 setState { it.copy(status = "Sync failed: ${error.message ?: "check connection"}") }
@@ -161,11 +161,11 @@ class CloudSyncManager(
         }
     }
 
-    fun deleteCatalogItem(itemId: String) {
+    fun deleteCatalogItem(itemId: String, snapshot: InventorySnapshot) {
         scope.launch {
             try {
                 workspaceDocument().collection("catalog").document(itemId).delete().await()
-                uploadSnapshot(database.snapshot(), pruneRemovedDocuments = true)
+                uploadSnapshot(snapshot, pruneRemovedDocuments = true)
                 setState { it.copy(status = "Cloud sync active") }
             } catch (error: Exception) {
                 setState { it.copy(status = "Could not delete item from cloud: ${error.message ?: "check connection"}") }
@@ -180,14 +180,13 @@ class CloudSyncManager(
             uploadSnapshot(local)
         } else {
             database.mergeRemote(remote.catalog, remote.inventories, remote.stock, remote.movements)
-            // Upload local-only documents after download, preserving data created before joining a workspace.
-            uploadSnapshot(database.snapshot())
         }
         refreshSettings()
     }
 
     private suspend fun readRemote(): RemoteSnapshot {
         val root = workspaceDocument()
+        val workspaceExists = root.get().await().exists()
         val catalog = root.collection("catalog").get().await().documents.mapNotNull { document ->
             val id = document.getString("id") ?: return@mapNotNull null
             CatalogItem(
@@ -214,7 +213,7 @@ class CloudSyncManager(
                 document.getLong("occurredAt") ?: 0L,
             )
         }
-        return RemoteSnapshot(catalog, inventories, stock, movements)
+        return RemoteSnapshot(workspaceExists, catalog, inventories, stock, movements)
     }
 
     private suspend fun uploadSnapshot(snapshot: InventorySnapshot, pruneRemovedDocuments: Boolean = false) {
@@ -314,12 +313,13 @@ class CloudSyncManager(
     }
 
     private data class RemoteSnapshot(
+        val workspaceExists: Boolean,
         val catalog: List<CatalogItem>,
         val inventories: List<String>,
         val stock: List<StockRecord>,
         val movements: List<MovementRecord>,
     ) {
-        val isEmpty: Boolean get() = catalog.isEmpty() && inventories.isEmpty() && stock.isEmpty() && movements.isEmpty()
+        val isEmpty: Boolean get() = !workspaceExists
     }
 
     companion object {
