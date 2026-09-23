@@ -4,6 +4,10 @@ import android.Manifest
 import android.content.ContentValues
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Typeface
 import android.os.Bundle
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
@@ -120,14 +124,14 @@ private class InventoryViewModel(context: Context) : ViewModel() {
         }
     }
 
-    fun createItem(id: String, name: String, weightText: String, origin: String) {
+    fun createItem(name: String, storage: String, smNumber: String, weightText: String) {
         val weight = weightText.replace(',', '.').toDoubleOrNull()
         if (weight == null) {
             state = state.copy(message = "Enter a valid weight in kilograms.")
             return
         }
         viewModelScope.launch {
-            val error = withContext(Dispatchers.IO) { database.addItem(id, name, weight, origin) }
+            val error = withContext(Dispatchers.IO) { database.addItem(name, storage, smNumber, weight) }
             if (error == null) {
                 state = state.copy(message = "Item added to the sticker catalog.")
                 refresh()
@@ -410,7 +414,7 @@ private fun StickersScreen(state: InventoryUiState, viewModel: InventoryViewMode
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(item.name, style = MaterialTheme.typography.titleMedium)
-                    Text("ID: ${item.id} • ${item.weightKg} kg • ${item.origin}")
+                    Text("${item.storage} • ${item.smNumber} • ${item.weightKg} kg")
                     Row {
                         TextButton(onClick = { selectedItem = item }) { Text("Make QR sticker") }
                         TextButton(onClick = { viewModel.deleteItem(item.id) }) { Text("Delete") }
@@ -422,8 +426,8 @@ private fun StickersScreen(state: InventoryUiState, viewModel: InventoryViewMode
     if (addingItem) {
         AddItemDialog(
             onDismiss = { addingItem = false },
-            onConfirm = { id, name, weight, origin ->
-                viewModel.createItem(id, name, weight, origin)
+            onConfirm = { name, storage, smNumber, weight ->
+                viewModel.createItem(name, storage, smNumber, weight)
                 addingItem = false
             },
         )
@@ -446,24 +450,24 @@ private fun NameDialog(title: String, label: String, onDismiss: () -> Unit, onCo
 @Composable
 private fun AddItemDialog(
     onDismiss: () -> Unit,
-    onConfirm: (id: String, name: String, weight: String, origin: String) -> Unit,
+    onConfirm: (name: String, storage: String, smNumber: String, weight: String) -> Unit,
 ) {
-    var id by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
+    var storage by remember { mutableStateOf("") }
+    var smNumber by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
-    var origin by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add catalog item") },
         text = {
             Column {
-                OutlinedTextField(id, { id = it }, label = { Text("ID number") }, singleLine = true)
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(storage, { storage = it }, label = { Text("Storage name") }, singleLine = true)
+                OutlinedTextField(smNumber, { smNumber = it }, label = { Text("SM number") }, singleLine = true)
                 OutlinedTextField(weight, { weight = it }, label = { Text("Weight per unit (kg)") }, singleLine = true)
-                OutlinedTextField(origin, { origin = it }, label = { Text("Place of origin") }, singleLine = true)
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(id, name, weight, origin) }) { Text("Add") } },
+        confirmButton = { TextButton(onClick = { onConfirm(name, storage, smNumber, weight) }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -471,15 +475,19 @@ private fun AddItemDialog(
 @Composable
 private fun QrStickerDialog(item: CatalogItem, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val bitmap = remember(item.id) { createQrBitmap(item.id) }
+    val bitmap = remember(item.id) { createStickerBitmap(item) }
     var resultMessage by remember { mutableStateOf<String?>(null) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("${item.name} QR sticker") },
+        title = { Text("${item.name} sticker") },
         text = {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Image(bitmap = bitmap.asImageBitmap(), contentDescription = "QR code for ${item.id}", modifier = Modifier.size(240.dp))
-                Text("QR data: ${item.id}")
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Sticker for ${item.name}",
+                    modifier = Modifier.fillMaxWidth().height(180.dp),
+                )
+                Text("QR ID: ${item.id}")
                 resultMessage?.let { Text(it) }
             }
         },
@@ -492,12 +500,41 @@ private fun QrStickerDialog(item: CatalogItem, onDismiss: () -> Unit) {
     )
 }
 
-private fun createQrBitmap(value: String): Bitmap {
-    val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, 768, 768)
-    return Bitmap.createBitmap(768, 768, Bitmap.Config.ARGB_8888).apply {
-        for (x in 0 until 768) {
-            for (y in 0 until 768) {
-                setPixel(x, y, if (matrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+private fun createStickerBitmap(item: CatalogItem): Bitmap {
+    val width = 1200
+    val height = 675
+    val sticker = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(sticker)
+    canvas.drawColor(Color.WHITE)
+    val centeredPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
+    }
+    centeredPaint.textSize = 82f
+    canvas.drawText(item.name.uppercase(), width / 2f, 150f, centeredPaint)
+    centeredPaint.textSize = 42f
+    canvas.drawText(item.storage.uppercase(), width / 2f, 220f, centeredPaint)
+
+    val qr = createQrBitmap(item.id, 250)
+    canvas.drawBitmap(qr, 875f, 270f, null)
+
+    val cornerPaint = Paint(centeredPaint).apply {
+        textAlign = Paint.Align.LEFT
+        textSize = 38f
+    }
+    canvas.drawText(item.smNumber.uppercase(), 70f, 610f, cornerPaint)
+    cornerPaint.textAlign = Paint.Align.RIGHT
+    canvas.drawText("Datum:__________________", width - 70f, 610f, cornerPaint)
+    return sticker
+}
+
+private fun createQrBitmap(value: String, size: Int): Bitmap {
+    val matrix = QRCodeWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
+    return Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888).apply {
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                setPixel(x, y, if (matrix[x, y]) Color.BLACK else Color.WHITE)
             }
         }
     }

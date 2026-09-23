@@ -12,7 +12,8 @@ data class InventoryItem(
     val id: String,
     val name: String,
     val weightKg: Double,
-    val origin: String,
+    val storage: String,
+    val smNumber: String,
     val quantity: Int,
 )
 
@@ -20,7 +21,8 @@ data class CatalogItem(
     val id: String,
     val name: String,
     val weightKg: Double,
-    val origin: String,
+    val storage: String,
+    val smNumber: String,
 )
 
 class InventoryDatabase(context: Context) :
@@ -41,7 +43,8 @@ class InventoryDatabase(context: Context) :
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 weight_kg REAL NOT NULL,
-                origin TEXT NOT NULL
+                origin TEXT NOT NULL,
+                sm_number TEXT NOT NULL
             )
             """.trimIndent(),
         )
@@ -59,7 +62,11 @@ class InventoryDatabase(context: Context) :
         )
     }
 
-    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(database: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) {
+            database.execSQL("ALTER TABLE items ADD COLUMN sm_number TEXT NOT NULL DEFAULT ''")
+        }
+    }
 
     fun inventories(): List<Inventory> = readableDatabase.rawQuery(
         "SELECT id, name FROM inventories ORDER BY name COLLATE NOCASE",
@@ -71,19 +78,27 @@ class InventoryDatabase(context: Context) :
     }
 
     fun catalogItems(): List<CatalogItem> = readableDatabase.rawQuery(
-        "SELECT id, name, weight_kg, origin FROM items ORDER BY name COLLATE NOCASE",
+        "SELECT id, name, weight_kg, origin, sm_number FROM items ORDER BY name COLLATE NOCASE",
         null,
     ).use { cursor ->
         buildList {
             while (cursor.moveToNext()) {
-                add(CatalogItem(cursor.getString(0), cursor.getString(1), cursor.getDouble(2), cursor.getString(3)))
+                add(
+                    CatalogItem(
+                        cursor.getString(0),
+                        cursor.getString(1),
+                        cursor.getDouble(2),
+                        cursor.getString(3),
+                        cursor.getString(4),
+                    ),
+                )
             }
         }
     }
 
     fun stock(inventoryId: Long): List<InventoryItem> = readableDatabase.rawQuery(
         """
-        SELECT i.id, i.name, i.weight_kg, i.origin, s.quantity
+        SELECT i.id, i.name, i.weight_kg, i.origin, i.sm_number, s.quantity
         FROM stock s
         JOIN items i ON i.id = s.item_id
         WHERE s.inventory_id = ? AND s.quantity > 0
@@ -99,7 +114,8 @@ class InventoryDatabase(context: Context) :
                         cursor.getString(1),
                         cursor.getDouble(2),
                         cursor.getString(3),
-                        cursor.getInt(4),
+                        cursor.getString(4),
+                        cursor.getInt(5),
                     ),
                 )
             }
@@ -119,19 +135,23 @@ class InventoryDatabase(context: Context) :
         }
     }
 
-    fun addItem(id: String, name: String, weightKg: Double, origin: String): String? {
-        if (id.isBlank() || name.isBlank() || origin.isBlank()) return "ID, name, and origin are required."
+    fun addItem(name: String, storage: String, smNumber: String, weightKg: Double): String? {
+        if (name.isBlank() || storage.isBlank() || smNumber.isBlank()) {
+            return "Name, storage, and SM number are required."
+        }
         if (weightKg < 0) return "Weight cannot be negative."
+        val itemId = ItemIdGenerator.create(name, storage, smNumber, weightKg)
         return try {
             writableDatabase.insertOrThrow("items", null, ContentValues().apply {
-                put("id", id.trim())
+                put("id", itemId)
                 put("name", name.trim())
                 put("weight_kg", weightKg)
-                put("origin", origin.trim())
+                put("origin", storage.trim())
+                put("sm_number", smNumber.trim())
             })
             null
         } catch (_: SQLiteConstraintException) {
-            "An item with ID ${id.trim()} already exists."
+            "Could not create a unique item ID. Try again."
         }
     }
 
@@ -193,6 +213,6 @@ class InventoryDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "inventory.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
     }
 }
