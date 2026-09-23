@@ -594,7 +594,8 @@ private fun exportInventoryCsv(context: Context, uri: Uri, stock: List<Inventory
         context.contentResolver.openOutputStream(uri)?.use { outputStream ->
             OutputStreamWriter(outputStream, Charsets.UTF_8).use { writer ->
                 writer.append('\uFEFF')
-                writer.appendLine("Name,Storage,SM number,Quantity,Weight per unit (kg),Last added")
+                writer.appendLine("sep=;")
+                writer.appendLine("Name;Storage;SM number;Quantity;Weight per unit (kg);Last added")
                 stock.forEach { item ->
                     writer.appendLine(
                         listOf(
@@ -604,7 +605,7 @@ private fun exportInventoryCsv(context: Context, uri: Uri, stock: List<Inventory
                             item.quantity.toString(),
                             item.weightKg.toString(),
                             item.lastAddedAt?.let(::formatSpreadsheetTimestamp).orEmpty(),
-                        ).joinToString(",") { csvField(it) },
+                        ).joinToString(";") { csvField(it) },
                     )
                 }
             }
