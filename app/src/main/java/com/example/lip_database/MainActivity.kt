@@ -633,6 +633,7 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
     }
     if (addingItem) {
         AddItemDialog(
+            catalogItems = state.catalogItems.filter { viewModel.hasAccessTo(it.smNumber) },
             onDismiss = { addingItem = false },
             onConfirm = { name, itemCode, storage, smNumber, weight ->
                 viewModel.createItem(name, itemCode, storage, smNumber, weight)
@@ -645,6 +646,7 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
 
 @Composable
 private fun AddItemDialog(
+    catalogItems: List<CatalogItem>,
     onDismiss: () -> Unit,
     onConfirm: (name: String, itemCode: String, storage: String, smNumber: String, weight: String) -> Unit,
 ) {
@@ -658,15 +660,31 @@ private fun AddItemDialog(
         title = { Text("Add catalog item") },
         text = {
             Column {
-                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
                 OutlinedTextField(
                     itemCode,
-                    { itemCode = it.filter(Char::isDigit).take(6) },
+                    {
+                        val normalizedCode = it.filter(Char::isDigit).take(6)
+                        itemCode = normalizedCode
+                        catalogItems.firstOrNull { item -> item.itemCode == normalizedCode }?.let { item ->
+                            name = item.name
+                        }
+                    },
                     label = { Text("Šifra (6 digits)") },
                     singleLine = true,
                 )
+                OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
                 OutlinedTextField(storage, { storage = it }, label = { Text("Storage name") }, singleLine = true)
-                OutlinedTextField(smNumber, { smNumber = it }, label = { Text("SM number") }, singleLine = true)
+                OutlinedTextField(
+                    smNumber,
+                    {
+                        smNumber = it
+                        catalogItems.firstOrNull { item -> item.smNumber == it.trim() }?.let { item ->
+                            storage = item.storage
+                        }
+                    },
+                    label = { Text("SM number") },
+                    singleLine = true,
+                )
                 OutlinedTextField(weight, { weight = it }, label = { Text("Weight per unit (kg)") }, singleLine = true)
             }
         },
