@@ -9,6 +9,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -49,10 +51,12 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,14 +67,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.AddCircle
 import androidx.compose.material.icons.filled.QrCode2
-import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
@@ -84,7 +86,7 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import java.io.IOException
 import java.util.concurrent.Executors
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -257,55 +259,65 @@ private fun AppTabIcon(tab: AppTab) {
 @Composable
 private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: InventoryViewModel, isAddition: Boolean) {
     var inventoryMenuOpen by remember { mutableStateOf(false) }
-    var scannerVisible by remember { mutableStateOf(false) }
     var cameraMessage by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
     val pending = remember { mutableStateMapOf<String, Int>() }
+    var cameraPermissionGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val requestCameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
-        if (granted) scannerVisible = true else cameraMessage = "Camera access is required to scan QR codes."
+        cameraPermissionGranted = granted
+        if (!granted) cameraMessage = "Camera access is required to scan QR codes."
     }
     val selectedInventory = state.inventories.firstOrNull { it.id == state.selectedInventoryId }
     val catalogById = state.catalogItems.associateBy(CatalogItem::id)
 
-    Text(
-        if (isAddition) "Add items" else "Remove items",
-        style = MaterialTheme.typography.headlineSmall,
-    )
-    Text("Choose an SM inventory, scan its QR stickers, then confirm the batch.")
+    LaunchedEffect(Unit) {
+        if (!cameraPermissionGranted) requestCameraPermission.launch(Manifest.permission.CAMERA)
+    }
+
+    Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(12.dp))
-    Box {
-        OutlinedButton(onClick = { inventoryMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(selectedInventory?.name ?: "Select inventory")
+    Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
+        if (cameraPermissionGranted) {
+            CameraScanner(
+                onCode = { code -> pending[code] = (pending[code] ?: 0) + 1 },
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceVariant) {}
         }
-        androidx.compose.material3.DropdownMenu(
-            expanded = inventoryMenuOpen,
-            onDismissRequest = { inventoryMenuOpen = false },
-        ) {
-            state.inventories.forEach { inventory ->
-                androidx.compose.material3.DropdownMenuItem(
-                    text = { Text(inventory.name) },
-                    onClick = {
-                        viewModel.selectInventory(inventory.id)
-                        inventoryMenuOpen = false
-                        pending.clear()
-                    },
-                )
+        Box(modifier = Modifier.padding(12.dp)) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                tonalElevation = 4.dp,
+            ) {
+                OutlinedButton(onClick = { inventoryMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(selectedInventory?.name ?: "Select inventory")
+                }
+            }
+            androidx.compose.material3.DropdownMenu(
+                expanded = inventoryMenuOpen,
+                onDismissRequest = { inventoryMenuOpen = false },
+            ) {
+                state.inventories.forEach { inventory ->
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text(inventory.name) },
+                        onClick = {
+                            viewModel.selectInventory(inventory.id)
+                            inventoryMenuOpen = false
+                            pending.clear()
+                        },
+                    )
+                }
             }
         }
-    }
-    if (state.inventories.isEmpty()) {
-        Text("Add an item on the Stickers tab to create its SM inventory.")
-    }
-    Spacer(Modifier.height(8.dp))
-    Button(
-        onClick = { requestCameraPermission.launch(Manifest.permission.CAMERA) },
-        enabled = selectedInventory != null,
-        modifier = Modifier.fillMaxWidth().height(52.dp),
-    ) {
-        Icon(Icons.Filled.QrCodeScanner, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text("Scan QR code")
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     Spacer(Modifier.height(12.dp))
@@ -348,15 +360,6 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
         ) {
             Text("Confirm")
         }
-    }
-    if (scannerVisible) {
-        QrScannerDialog(
-            onDismiss = { scannerVisible = false },
-            onCode = { code ->
-                pending[code] = (pending[code] ?: 0) + 1
-                scannerVisible = false
-            },
-        )
     }
 }
 
@@ -545,25 +548,14 @@ private fun saveQrPng(context: Context, itemName: String, smNumber: String, bitm
 private fun safeFileName(value: String): String = value.replace(Regex("""[\\/:*?"<>|]"""), "_")
 
 @Composable
-private fun QrScannerDialog(onDismiss: () -> Unit, onCode: (String) -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Scan an item QR code") },
-        text = { CameraScanner(onCode) },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@Composable
-private fun CameraScanner(onCode: (String) -> Unit) {
+private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestOnCode by rememberUpdatedState(onCode)
     val previewView = remember { PreviewView(context) }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-    val scanned = remember { AtomicBoolean(false) }
+    val nextScanAllowedAt = remember { AtomicLong(0) }
 
     DisposableEffect(lifecycleOwner) {
         val setupCamera = Runnable {
@@ -583,7 +575,13 @@ private fun CameraScanner(onCode: (String) -> Unit) {
                     scanner.process(InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees))
                         .addOnSuccessListener { codes ->
                             codes.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue?.let { value ->
-                                if (scanned.compareAndSet(false, true)) latestOnCode(value)
+                                val now = SystemClock.elapsedRealtime()
+                                val nextAllowed = nextScanAllowedAt.get()
+                                if (now >= nextAllowed &&
+                                    nextScanAllowedAt.compareAndSet(nextAllowed, now + SCAN_COOLDOWN_MILLIS)
+                                ) {
+                                    latestOnCode(value)
+                                }
                             }
                         }
                         .addOnCompleteListener { imageProxy.close() }
@@ -598,5 +596,7 @@ private fun CameraScanner(onCode: (String) -> Unit) {
             cameraExecutor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(360.dp))
+    AndroidView(factory = { previewView }, modifier = modifier)
 }
+
+private const val SCAN_COOLDOWN_MILLIS = 1_000L
