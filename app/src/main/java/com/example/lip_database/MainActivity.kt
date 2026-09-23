@@ -112,18 +112,6 @@ private class InventoryViewModel(context: Context) : ViewModel() {
         refresh()
     }
 
-    fun createInventory(name: String) {
-        viewModelScope.launch {
-            val error = withContext(Dispatchers.IO) { database.addInventory(name) }
-            if (error == null) {
-                state = state.copy(message = "Inventory created.")
-                refresh()
-            } else {
-                state = state.copy(message = error)
-            }
-        }
-    }
-
     fun createItem(name: String, storage: String, smNumber: String, weightText: String) {
         val weight = weightText.replace(',', '.').toDoubleOrNull()
         if (weight == null) {
@@ -133,7 +121,9 @@ private class InventoryViewModel(context: Context) : ViewModel() {
         viewModelScope.launch {
             val error = withContext(Dispatchers.IO) { database.addItem(name, storage, smNumber, weight) }
             if (error == null) {
-                state = state.copy(message = "Item added to the sticker catalog.")
+                state = state.copy(
+                    message = "Item added. ${InventoryDatabase.inventoryName(storage, smNumber)} is ready to use.",
+                )
                 refresh()
             } else {
                 state = state.copy(message = error)
@@ -282,7 +272,7 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
         }
     }
     if (state.inventories.isEmpty()) {
-        Text("Create an inventory on the Inventories tab first.")
+        Text("Add an item on the Stickers tab to create its SM inventory.")
     }
     Spacer(Modifier.height(8.dp))
     Button(
@@ -341,12 +331,8 @@ private fun OperationScreen(state: InventoryUiState, viewModel: InventoryViewMod
 
 @Composable
 private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
-    var creatingInventory by remember { mutableStateOf(false) }
     Text("Inventories", style = MaterialTheme.typography.headlineSmall)
-    Spacer(Modifier.height(8.dp))
-    Button(onClick = { creatingInventory = true }, modifier = Modifier.fillMaxWidth()) {
-        Text("Create inventory")
-    }
+    Text("Inventories are created automatically from an item's storage name and SM number.")
     Spacer(Modifier.height(12.dp))
     LazyColumn(modifier = Modifier.height(440.dp)) {
         items(state.inventories, key = Inventory::id) { inventory ->
@@ -370,17 +356,6 @@ private fun InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewM
                 }
             }
         }
-    }
-    if (creatingInventory) {
-        NameDialog(
-            title = "Create inventory",
-            label = "Inventory name",
-            onDismiss = { creatingInventory = false },
-            onConfirm = {
-                viewModel.createInventory(it)
-                creatingInventory = false
-            },
-        )
     }
 }
 
@@ -419,18 +394,6 @@ private fun StickersScreen(state: InventoryUiState, viewModel: InventoryViewMode
         )
     }
     selectedItem?.let { QrStickerDialog(it, onDismiss = { selectedItem = null }) }
-}
-
-@Composable
-private fun NameDialog(title: String, label: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
-    var value by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { OutlinedTextField(value, { value = it }, label = { Text(label) }, singleLine = true) },
-        confirmButton = { TextButton(onClick = { onConfirm(value) }) { Text("Create") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
 }
 
 @Composable

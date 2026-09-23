@@ -141,17 +141,29 @@ class InventoryDatabase(context: Context) :
         }
         if (weightKg < 0) return "Weight cannot be negative."
         val itemId = ItemIdGenerator.create(name, storage, smNumber, weightKg)
+        val inventoryName = inventoryName(storage, smNumber)
+        val database = writableDatabase
+        database.beginTransaction()
         return try {
-            writableDatabase.insertOrThrow("items", null, ContentValues().apply {
+            database.insertWithOnConflict(
+                "inventories",
+                null,
+                ContentValues().apply { put("name", inventoryName) },
+                SQLiteDatabase.CONFLICT_IGNORE,
+            )
+            database.insertOrThrow("items", null, ContentValues().apply {
                 put("id", itemId)
                 put("name", name.trim())
                 put("weight_kg", weightKg)
                 put("origin", storage.trim())
                 put("sm_number", smNumber.trim())
             })
+            database.setTransactionSuccessful()
             null
         } catch (_: SQLiteConstraintException) {
             "Could not create a unique item ID. Try again."
+        } finally {
+            database.endTransaction()
         }
     }
 
@@ -216,5 +228,8 @@ class InventoryDatabase(context: Context) :
     companion object {
         private const val DATABASE_NAME = "inventory.db"
         private const val DATABASE_VERSION = 2
+
+        fun inventoryName(storage: String, smNumber: String): String =
+            "${storage.trim()} - ${smNumber.trim()}"
     }
 }
