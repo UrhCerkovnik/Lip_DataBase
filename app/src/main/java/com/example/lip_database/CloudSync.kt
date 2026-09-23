@@ -1,6 +1,5 @@
 package com.example.lip_database
 
-import android.content.Context
 import android.util.Base64
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
@@ -14,7 +13,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
-import java.util.UUID
 
 data class CloudUiState(
     val workspaceId: String = "",
@@ -31,11 +29,9 @@ data class CloudUiState(
  * Firestore rules permit every authenticated anonymous user in a shared workspace.
  */
 class CloudSyncManager(
-    context: Context,
     private val database: InventoryDatabase,
     private val onStateChanged: (CloudUiState) -> Unit,
 ) {
-    private val preferences = context.getSharedPreferences("cloud_sync", Context.MODE_PRIVATE)
     private val firestore = FirebaseFirestore.getInstance()
     private val auth = FirebaseAuth.getInstance()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,19 +52,6 @@ class CloudSyncManager(
                 setState { it.copy(status = "Cloud sync unavailable: ${error.message ?: "check connection"}") }
             }
         }
-    }
-
-    fun changeWorkspace(value: String) {
-        val workspace = value.trim()
-        if (workspace.length < 6) {
-            setState { it.copy(status = "Workspace code must be at least 6 characters.") }
-            return
-        }
-        preferences.edit().putString(PREF_WORKSPACE, workspace).apply()
-        listeners.forEach(ListenerRegistration::remove)
-        listeners.clear()
-        currentState = CloudUiState(workspaceId = workspace)
-        start()
     }
 
     fun syncNow() {
@@ -264,12 +247,17 @@ class CloudSyncManager(
     }
 
     private suspend fun refreshSettings() {
-        val configured = settingsDocument().get().await().getString("masterPinHash") != null
+        val settings = settingsDocument()
+        firestore.runTransaction { transaction ->
+            if (transaction.get(settings).getString("masterPinHash") == null) {
+                transaction.set(settings, mapOf("masterPinHash" to hashPin(DEFAULT_MASTER_PIN)))
+            }
+        }.await()
+        val configured = true
         setState { it.copy(masterPinConfigured = configured) }
     }
 
-    private fun workspaceId(): String = preferences.getString(PREF_WORKSPACE, null)
-        ?: UUID.randomUUID().toString().also { preferences.edit().putString(PREF_WORKSPACE, it).apply() }
+    private fun workspaceId(): String = COMPANY_WORKSPACE_ID
 
     private fun workspaceDocument() = firestore.collection("workspaces").document(workspaceId())
     private fun settingsDocument() = workspaceDocument().collection("metadata").document("settings")
@@ -289,7 +277,8 @@ class CloudSyncManager(
     }
 
     companion object {
-        private const val PREF_WORKSPACE = "workspace_id"
+        private const val COMPANY_WORKSPACE_ID = "lip-database-company"
+        private const val DEFAULT_MASTER_PIN = "0000"
 
         internal fun hashPin(pin: String): String =
             MessageDigest.getInstance("SHA-256").digest(pin.toByteArray()).joinToString("") { "%02x".format(it) }

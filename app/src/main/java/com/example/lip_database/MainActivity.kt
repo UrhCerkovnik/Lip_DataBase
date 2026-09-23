@@ -116,7 +116,7 @@ private data class InventoryUiState(
 
 private class InventoryViewModel(context: Context) : ViewModel() {
     private val database = InventoryDatabase(context.applicationContext)
-    private val cloudSync = CloudSyncManager(context.applicationContext, database) { cloud ->
+    private val cloudSync = CloudSyncManager(database) { cloud ->
         state = state.copy(cloud = cloud)
         refresh()
     }
@@ -189,7 +189,6 @@ private class InventoryViewModel(context: Context) : ViewModel() {
         }
     }
 
-    fun configureWorkspace(workspace: String) = cloudSync.changeWorkspace(workspace)
     fun syncNow() = cloudSync.syncNow()
     fun setMasterPin(pin: String) = cloudSync.setMasterPin(pin)
     fun unlock(pin: String) = cloudSync.unlock(pin)
@@ -242,6 +241,12 @@ class MainActivity : ComponentActivity() {
 private fun InventoryApp(viewModel: InventoryViewModel) {
     var selectedTab by remember { mutableStateOf(AppTab.ADD) }
     val state = viewModel.state
+    if (state.cloud.isLocked) {
+        Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+            SyncScreen(state, viewModel)
+        }
+        return
+    }
 
     Scaffold(
         bottomBar = {
@@ -473,34 +478,18 @@ private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: In
 
 @Composable
 private fun ColumnScope.SyncScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
-    var workspace by remember(state.cloud.workspaceId) { mutableStateOf(state.cloud.workspaceId) }
     var pin by remember { mutableStateOf("") }
     var smNumber by remember { mutableStateOf("") }
     var smPin by remember { mutableStateOf("") }
     Text("Cloud sync", style = MaterialTheme.typography.headlineSmall)
     Text(state.cloud.status, color = MaterialTheme.colorScheme.primary)
     Spacer(Modifier.height(12.dp))
-    OutlinedTextField(
-        value = workspace,
-        onValueChange = { workspace = it },
-        label = { Text("Shared workspace code") },
-        supportingText = { Text("Use the same code on every phone. Keep it private.") },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(onClick = { viewModel.configureWorkspace(workspace) }, modifier = Modifier.weight(1f)) { Text("Join workspace") }
-        OutlinedButton(onClick = viewModel::syncNow, modifier = Modifier.weight(1f)) { Text("Sync now") }
-    }
+    Text("Company workspace connected.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    OutlinedButton(onClick = viewModel::syncNow, modifier = Modifier.fillMaxWidth()) { Text("Sync now") }
     Spacer(Modifier.height(20.dp))
-    if (!state.cloud.masterPinConfigured) {
-        Text("Set master PIN", style = MaterialTheme.typography.titleMedium)
-        Text("The first phone sets this four-digit PIN.")
-        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(4) }, label = { Text("Master PIN") }, singleLine = true)
-        Button(onClick = { viewModel.setMasterPin(pin); pin = "" }) { Text("Set master PIN") }
-    } else if (state.cloud.isLocked) {
+    if (state.cloud.isLocked) {
         Text("Unlock inventory", style = MaterialTheme.typography.titleMedium)
-        Text("Use the master PIN for all SMs or an SM PIN for one SM.")
+        Text("Enter the master PIN or an SM PIN.")
         OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(4) }, label = { Text("PIN") }, singleLine = true)
         Button(onClick = { viewModel.unlock(pin); pin = "" }) { Text("Unlock") }
     } else {
