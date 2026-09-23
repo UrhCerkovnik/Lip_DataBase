@@ -728,7 +728,7 @@ private fun createStickerBitmap(item: CatalogItem): Bitmap {
     canvas.drawText(formattedItemCode, width / 2f, 510f, itemCodePaint)
     val itemCodeEnd = width / 2f + itemCodePaint.measureText(formattedItemCode) / 2f
     val starPaint = Paint(itemCodePaint).apply { textSize = 32f }
-    canvas.drawText("*", itemCodeEnd + 4f, 462f, starPaint)
+    canvas.drawText("*", itemCodeEnd + 4f, 478f, starPaint)
 
     val cornerPaint = Paint(centeredPaint).apply {
         textAlign = Paint.Align.LEFT
