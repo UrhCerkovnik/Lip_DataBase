@@ -102,6 +102,7 @@ private enum class AppTab(val label: String) {
     REMOVE("Remove"),
     INVENTORIES("Inventories"),
     STICKERS("Stickers"),
+    SYNC("Sync"),
 }
 
 private data class InventoryUiState(
@@ -110,16 +111,22 @@ private data class InventoryUiState(
     val selectedInventoryId: Long? = null,
     val selectedStock: List<InventoryItem> = emptyList(),
     val message: String? = null,
+    val cloud: CloudUiState = CloudUiState(),
 )
 
 private class InventoryViewModel(context: Context) : ViewModel() {
     private val database = InventoryDatabase(context.applicationContext)
+    private val cloudSync = CloudSyncManager(context.applicationContext, database) { cloud ->
+        state = state.copy(cloud = cloud)
+        refresh()
+    }
 
     var state by mutableStateOf(InventoryUiState())
         private set
 
     init {
         refresh()
+        cloudSync.start()
     }
 
     fun selectInventory(inventoryId: Long?) {
@@ -129,6 +136,10 @@ private class InventoryViewModel(context: Context) : ViewModel() {
     }
 
     fun createItem(name: String, storage: String, smNumber: String, weightText: String) {
+        if (!hasAccessTo(smNumber.trim())) {
+            state = state.copy(message = "This PIN only allows SM ${state.cloud.unlockedSmNumber}.")
+            return
+        }
         val weight = weightText.replace(',', '.').toDoubleOrNull()
         if (weight == null) {
             state = state.copy(message = "Enter a valid weight in kilograms.")
@@ -141,6 +152,7 @@ private class InventoryViewModel(context: Context) : ViewModel() {
                     message = "Item added. ${InventoryDatabase.inventoryName(storage, smNumber)} is ready to use.",
                 )
                 refresh()
+                cloudSync.publishLocalChanges()
             } else {
                 state = state.copy(message = error)
             }
@@ -153,6 +165,7 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             if (error == null) {
                 state = state.copy(message = "Item deleted.")
                 refresh()
+                cloudSync.publishLocalChanges()
             } else {
                 state = state.copy(message = error)
             }
@@ -168,11 +181,24 @@ private class InventoryViewModel(context: Context) : ViewModel() {
                 state = state.copy(message = if (isAddition) "Items added to inventory." else "Items removed from inventory.")
                 onSuccess()
                 refresh()
+                cloudSync.publishLocalChanges()
             } else {
                 state = state.copy(message = error)
             }
+
         }
     }
+
+    fun configureWorkspace(workspace: String) = cloudSync.changeWorkspace(workspace)
+    fun syncNow() = cloudSync.syncNow()
+    fun setMasterPin(pin: String) = cloudSync.setMasterPin(pin)
+    fun unlock(pin: String) = cloudSync.unlock(pin)
+    fun setSmPin(smNumber: String, pin: String) = cloudSync.setSmPin(smNumber, pin)
+    fun lock() = cloudSync.lock()
+
+    fun hasAccessTo(smNumber: String): Boolean =
+        !state.cloud.isLocked &&
+            (state.cloud.isMasterUnlocked || state.cloud.unlockedSmNumber == null || state.cloud.unlockedSmNumber == smNumber)
 
     private fun refresh() {
         viewModelScope.launch {
@@ -246,6 +272,7 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
                 AppTab.REMOVE -> OperationScreen(state, viewModel, isAddition = false)
                 AppTab.INVENTORIES -> InventoriesScreen(state, viewModel)
                 AppTab.STICKERS -> StickersScreen(state, viewModel)
+                AppTab.SYNC -> SyncScreen(state, viewModel)
             }
         }
     }
@@ -258,6 +285,7 @@ private fun AppTabIcon(tab: AppTab) {
         AppTab.REMOVE -> Icons.Filled.RemoveCircle to "Remove"
         AppTab.INVENTORIES -> Icons.AutoMirrored.Filled.FormatListBulleted to "Inventories"
         AppTab.STICKERS -> Icons.Filled.QrCode2 to "Stickers"
+        AppTab.SYNC -> Icons.Filled.QrCode2 to "Cloud sync"
     }
     Icon(imageVector, contentDescription = description)
 }
@@ -280,8 +308,12 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
         cameraPermissionGranted = granted
         if (!granted) cameraMessage = "Camera access is required to scan QR codes."
     }
-    val selectedInventory = state.inventories.firstOrNull { it.id == state.selectedInventoryId }
-    val catalogById = state.catalogItems.associateBy(CatalogItem::id)
+    val visibleInventories = state.inventories.filter { inventory ->
+        !state.cloud.isLocked &&
+            (state.cloud.unlockedSmNumber == null || inventory.name.endsWith(" - ${state.cloud.unlockedSmNumber}"))
+    }
+    val selectedInventory = visibleInventories.firstOrNull { it.id == state.selectedInventoryId }
+    val catalogById = state.catalogItems.filter { viewModel.hasAccessTo(it.smNumber) }.associateBy(CatalogItem::id)
 
     LaunchedEffect(Unit) {
         if (!cameraPermissionGranted) requestCameraPermission.launch(Manifest.permission.CAMERA)
@@ -317,7 +349,7 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
                 expanded = inventoryMenuOpen,
                 onDismissRequest = { inventoryMenuOpen = false },
             ) {
-                state.inventories.forEach { inventory ->
+                visibleInventories.forEach { inventory ->
                     androidx.compose.material3.DropdownMenuItem(
                         text = { Text(inventory.name) },
                         onClick = {
@@ -403,7 +435,11 @@ private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: In
     Text("Inventories are created automatically from an item's storage name and SM number.")
     Spacer(Modifier.height(12.dp))
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        items(state.inventories, key = Inventory::id) { inventory ->
+        items(state.inventories.filter {
+            !state.cloud.isLocked &&
+                (state.cloud.unlockedSmNumber == null || it.name.endsWith(" - ${state.cloud.unlockedSmNumber}")
+            )
+        }, key = Inventory::id) { inventory ->
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -436,6 +472,59 @@ private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: In
 }
 
 @Composable
+private fun ColumnScope.SyncScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
+    var workspace by remember(state.cloud.workspaceId) { mutableStateOf(state.cloud.workspaceId) }
+    var pin by remember { mutableStateOf("") }
+    var smNumber by remember { mutableStateOf("") }
+    var smPin by remember { mutableStateOf("") }
+    Text("Cloud sync", style = MaterialTheme.typography.headlineSmall)
+    Text(state.cloud.status, color = MaterialTheme.colorScheme.primary)
+    Spacer(Modifier.height(12.dp))
+    OutlinedTextField(
+        value = workspace,
+        onValueChange = { workspace = it },
+        label = { Text("Shared workspace code") },
+        supportingText = { Text("Use the same code on every phone. Keep it private.") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { viewModel.configureWorkspace(workspace) }, modifier = Modifier.weight(1f)) { Text("Join workspace") }
+        OutlinedButton(onClick = viewModel::syncNow, modifier = Modifier.weight(1f)) { Text("Sync now") }
+    }
+    Spacer(Modifier.height(20.dp))
+    if (!state.cloud.masterPinConfigured) {
+        Text("Set master PIN", style = MaterialTheme.typography.titleMedium)
+        Text("The first phone sets this four-digit PIN.")
+        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(4) }, label = { Text("Master PIN") }, singleLine = true)
+        Button(onClick = { viewModel.setMasterPin(pin); pin = "" }) { Text("Set master PIN") }
+    } else if (state.cloud.isLocked) {
+        Text("Unlock inventory", style = MaterialTheme.typography.titleMedium)
+        Text("Use the master PIN for all SMs or an SM PIN for one SM.")
+        OutlinedTextField(pin, { pin = it.filter(Char::isDigit).take(4) }, label = { Text("PIN") }, singleLine = true)
+        Button(onClick = { viewModel.unlock(pin); pin = "" }) { Text("Unlock") }
+    } else {
+        Text(
+            if (state.cloud.isMasterUnlocked) "Master access is unlocked." else "Restricted to SM ${state.cloud.unlockedSmNumber}.",
+            style = MaterialTheme.typography.titleMedium,
+        )
+        OutlinedButton(onClick = viewModel::lock) { Text("Lock") }
+        if (state.cloud.isMasterUnlocked) {
+            Spacer(Modifier.height(16.dp))
+            Text("Set SM PIN", style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(smNumber, { smNumber = it }, label = { Text("SM number") }, singleLine = true)
+            OutlinedTextField(smPin, { smPin = it.filter(Char::isDigit).take(4) }, label = { Text("Four-digit SM PIN") }, singleLine = true)
+            Button(onClick = { viewModel.setSmPin(smNumber, smPin); smPin = "" }) { Text("Save SM PIN") }
+        }
+    }
+    Spacer(Modifier.height(16.dp))
+    Text(
+        "Prototype warning: PIN enforcement is client-side only. It is not access control on the Firebase free plan.",
+        color = MaterialTheme.colorScheme.error,
+    )
+}
+
+@Composable
 private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
     var addingItem by remember { mutableStateOf(false) }
     var selectedItem by remember { mutableStateOf<CatalogItem?>(null) }
@@ -449,7 +538,7 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
     }
     Spacer(Modifier.height(12.dp))
     LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        items(state.catalogItems, key = CatalogItem::id) { item ->
+        items(state.catalogItems.filter { viewModel.hasAccessTo(it.smNumber) }, key = CatalogItem::id) { item ->
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(item.name, style = MaterialTheme.typography.titleMedium)

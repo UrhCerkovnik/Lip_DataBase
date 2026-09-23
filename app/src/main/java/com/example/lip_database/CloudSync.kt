@@ -1,0 +1,302 @@
+package com.example.lip_database
+
+import android.content.Context
+import android.util.Base64
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FieldPath
+import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+import java.security.MessageDigest
+import java.util.UUID
+
+data class CloudUiState(
+    val workspaceId: String = "",
+    val status: String = "Connecting to cloud…",
+    val masterPinConfigured: Boolean = false,
+    val isMasterUnlocked: Boolean = false,
+    val unlockedSmNumber: String? = null,
+) {
+    val isLocked: Boolean get() = masterPinConfigured && !isMasterUnlocked && unlockedSmNumber == null
+}
+
+/**
+ * A deliberately small Firestore replication layer.  The PINs are UX restrictions, not security:
+ * Firestore rules permit every authenticated anonymous user in a shared workspace.
+ */
+class CloudSyncManager(
+    context: Context,
+    private val database: InventoryDatabase,
+    private val onStateChanged: (CloudUiState) -> Unit,
+) {
+    private val preferences = context.getSharedPreferences("cloud_sync", Context.MODE_PRIVATE)
+    private val firestore = FirebaseFirestore.getInstance()
+    private val auth = FirebaseAuth.getInstance()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var listeners = mutableListOf<ListenerRegistration>()
+    private var currentState = CloudUiState(workspaceId = workspaceId())
+    private var syncJob: Job? = null
+
+    fun start() {
+        setState { it }
+        scope.launch {
+            try {
+                if (auth.currentUser == null) auth.signInAnonymously().await()
+                refreshSettings()
+                synchronize()
+                listenForRemoteChanges()
+                setState { it.copy(status = "Cloud sync active") }
+            } catch (error: Exception) {
+                setState { it.copy(status = "Cloud sync unavailable: ${error.message ?: "check connection"}") }
+            }
+        }
+    }
+
+    fun changeWorkspace(value: String) {
+        val workspace = value.trim()
+        if (workspace.length < 6) {
+            setState { it.copy(status = "Workspace code must be at least 6 characters.") }
+            return
+        }
+        preferences.edit().putString(PREF_WORKSPACE, workspace).apply()
+        listeners.forEach(ListenerRegistration::remove)
+        listeners.clear()
+        currentState = CloudUiState(workspaceId = workspace)
+        start()
+    }
+
+    fun syncNow() {
+        scope.launch {
+            try {
+                synchronize()
+                setState { it.copy(status = "Cloud sync active") }
+            } catch (error: Exception) {
+                setState { it.copy(status = "Sync failed: ${error.message ?: "check connection"}") }
+            }
+        }
+    }
+
+    fun setMasterPin(pin: String) {
+        if (!isPin(pin)) {
+            setState { it.copy(status = "PIN must be exactly four digits.") }
+            return
+        }
+        scope.launch {
+            try {
+                val settings = settingsDocument()
+                firestore.runTransaction { transaction ->
+                    val existing = transaction.get(settings).getString("masterPinHash")
+                    if (existing == null) transaction.set(settings, mapOf("masterPinHash" to hashPin(pin)))
+                }.await()
+                refreshSettings()
+                setState { it.copy(isMasterUnlocked = true, unlockedSmNumber = null, status = "Master PIN configured.") }
+            } catch (error: Exception) {
+                setState { it.copy(status = "Could not configure master PIN.") }
+            }
+        }
+    }
+
+    fun unlock(pin: String) {
+        if (!isPin(pin)) {
+            setState { it.copy(status = "PIN must be exactly four digits.") }
+            return
+        }
+        scope.launch {
+            try {
+                val settings = settingsDocument().get().await()
+                val hash = hashPin(pin)
+                val master = settings.getString("masterPinHash")
+                val pins = settings.get("smPins") as? Map<*, *> ?: emptyMap<Any, Any>()
+                when {
+                    master == hash -> setState { it.copy(isMasterUnlocked = true, unlockedSmNumber = null, status = "Master access unlocked.") }
+                    else -> {
+                        val sm = pins.entries.firstOrNull { it.value == hash }?.key as? String
+                        if (sm == null) setState { it.copy(status = "Incorrect PIN.") }
+                        else setState { it.copy(isMasterUnlocked = false, unlockedSmNumber = sm, status = "SM $sm unlocked.") }
+                    }
+                }
+            } catch (_: Exception) {
+                setState { it.copy(status = "Could not unlock while offline.") }
+            }
+        }
+    }
+
+    fun setSmPin(smNumber: String, pin: String) {
+        if (!currentState.isMasterUnlocked) {
+            setState { it.copy(status = "Unlock with the master PIN first.") }
+            return
+        }
+        if (smNumber.isBlank() || !isPin(pin)) {
+            setState { it.copy(status = "Enter an SM number and exactly four PIN digits.") }
+            return
+        }
+        scope.launch {
+            try {
+                settingsDocument().update(FieldPath.of("smPins", smNumber.trim()), hashPin(pin)).await()
+                setState { it.copy(status = "PIN saved for SM ${smNumber.trim()}.") }
+            } catch (_: Exception) {
+                setState { it.copy(status = "Could not save SM PIN.") }
+            }
+        }
+    }
+
+    fun lock() = setState { it.copy(isMasterUnlocked = false, unlockedSmNumber = null, status = "Locked.") }
+
+    fun allowedSmNumber(): String? = currentState.unlockedSmNumber
+
+    fun publishLocalChanges() {
+        scope.launch {
+            try {
+                uploadSnapshot(database.snapshot(), pruneRemovedDocuments = true)
+                setState { it.copy(status = "Cloud sync active") }
+            } catch (error: Exception) {
+                setState { it.copy(status = "Sync failed: ${error.message ?: "check connection"}") }
+            }
+        }
+    }
+
+    private suspend fun synchronize() {
+        val remote = readRemote()
+        val local = database.snapshot()
+        if (remote.isEmpty) {
+            uploadSnapshot(local)
+        } else {
+            database.mergeRemote(remote.catalog, remote.inventories, remote.stock, remote.movements)
+            // Upload local-only documents after download, preserving data created before joining a workspace.
+            uploadSnapshot(database.snapshot())
+        }
+        refreshSettings()
+    }
+
+    private suspend fun readRemote(): RemoteSnapshot {
+        val root = workspaceDocument()
+        val catalog = root.collection("catalog").get().await().documents.mapNotNull { document ->
+            val id = document.getString("id") ?: return@mapNotNull null
+            CatalogItem(
+                id,
+                document.getString("name") ?: return@mapNotNull null,
+                document.getDouble("weightKg") ?: 0.0,
+                document.getString("storage") ?: "",
+                document.getString("smNumber") ?: "",
+            )
+        }
+        val inventories = root.collection("inventories").get().await().documents.mapNotNull { it.getString("name") }
+        val stock = root.collection("stock").get().await().documents.mapNotNull { document ->
+            val inventory = document.getString("inventoryName") ?: return@mapNotNull null
+            val itemId = document.getString("itemId") ?: return@mapNotNull null
+            StockRecord(inventory, itemId, (document.getLong("quantity") ?: 0).toInt())
+        }
+        val movements = root.collection("movements").get().await().documents.mapNotNull { document ->
+            val inventory = document.getString("inventoryName") ?: return@mapNotNull null
+            val itemId = document.getString("itemId") ?: return@mapNotNull null
+            MovementRecord(
+                document.id, inventory, itemId, (document.getLong("quantity") ?: 0).toInt(),
+                document.getString("action") ?: return@mapNotNull null,
+                document.getLong("occurredAt") ?: 0L,
+            )
+        }
+        return RemoteSnapshot(catalog, inventories, stock, movements)
+    }
+
+    private suspend fun uploadSnapshot(snapshot: InventorySnapshot, pruneRemovedDocuments: Boolean = false) {
+        val root = workspaceDocument()
+        val batch = firestore.batch()
+        batch.set(root, mapOf("updatedAt" to System.currentTimeMillis()), com.google.firebase.firestore.SetOptions.merge())
+        snapshot.catalogItems.forEach { item ->
+            batch.set(root.collection("catalog").document(item.id), mapOf(
+                "id" to item.id, "name" to item.name, "weightKg" to item.weightKg,
+                "storage" to item.storage, "smNumber" to item.smNumber,
+            ))
+        }
+        snapshot.inventories.forEach { inventory ->
+            batch.set(root.collection("inventories").document(documentId(inventory.name)), mapOf("name" to inventory.name))
+        }
+        snapshot.stock.forEach { record ->
+            batch.set(root.collection("stock").document(documentId("${record.inventoryName}|${record.itemId}")), mapOf(
+                "inventoryName" to record.inventoryName, "itemId" to record.itemId, "quantity" to record.quantity,
+            ))
+        }
+        snapshot.movements.forEach { movement ->
+            batch.set(root.collection("movements").document(movement.cloudId), mapOf(
+                "inventoryName" to movement.inventoryName, "itemId" to movement.itemId,
+                "quantity" to movement.quantity, "action" to movement.action, "occurredAt" to movement.occurredAt,
+            ))
+        }
+        if (pruneRemovedDocuments) {
+            val catalogIds = snapshot.catalogItems.mapTo(mutableSetOf()) { it.id }
+            root.collection("catalog").get().await().documents
+                .filter { it.id !in catalogIds }
+                .forEach { batch.delete(it.reference) }
+            val stockIds = snapshot.stock.mapTo(mutableSetOf()) { documentId("${it.inventoryName}|${it.itemId}") }
+            root.collection("stock").get().await().documents
+                .filter { it.id !in stockIds }
+                .forEach { batch.delete(it.reference) }
+        }
+        batch.commit().await()
+    }
+
+    private fun listenForRemoteChanges() {
+        val root = workspaceDocument()
+        listOf("catalog", "inventories", "stock", "movements").forEach { collection ->
+            listeners += root.collection(collection).addSnapshotListener { _, error ->
+                if (error == null) scheduleRemoteDownload()
+            }
+        }
+    }
+
+    private fun scheduleRemoteDownload() {
+        if (syncJob?.isActive == true) return
+        syncJob = scope.launch {
+            try {
+                val remote = readRemote()
+                database.mergeRemote(remote.catalog, remote.inventories, remote.stock, remote.movements)
+                withContext(Dispatchers.Main) { onStateChanged(currentState) }
+            } catch (_: Exception) {
+                // The next listener event or explicit sync retries the transient network failure.
+            }
+        }
+    }
+
+    private suspend fun refreshSettings() {
+        val configured = settingsDocument().get().await().getString("masterPinHash") != null
+        setState { it.copy(masterPinConfigured = configured) }
+    }
+
+    private fun workspaceId(): String = preferences.getString(PREF_WORKSPACE, null)
+        ?: UUID.randomUUID().toString().also { preferences.edit().putString(PREF_WORKSPACE, it).apply() }
+
+    private fun workspaceDocument() = firestore.collection("workspaces").document(workspaceId())
+    private fun settingsDocument() = workspaceDocument().collection("metadata").document("settings")
+
+    private fun setState(change: (CloudUiState) -> CloudUiState) {
+        currentState = change(currentState)
+        scope.launch(Dispatchers.Main) { onStateChanged(currentState) }
+    }
+
+    private data class RemoteSnapshot(
+        val catalog: List<CatalogItem>,
+        val inventories: List<String>,
+        val stock: List<StockRecord>,
+        val movements: List<MovementRecord>,
+    ) {
+        val isEmpty: Boolean get() = catalog.isEmpty() && inventories.isEmpty() && stock.isEmpty() && movements.isEmpty()
+    }
+
+    companion object {
+        private const val PREF_WORKSPACE = "workspace_id"
+
+        internal fun hashPin(pin: String): String =
+            MessageDigest.getInstance("SHA-256").digest(pin.toByteArray()).joinToString("") { "%02x".format(it) }
+
+        internal fun documentId(value: String): String =
+            Base64.encodeToString(MessageDigest.getInstance("SHA-256").digest(value.toByteArray()), Base64.URL_SAFE or Base64.NO_WRAP)
+
+        private fun isPin(pin: String) = pin.matches(Regex("""\d{4}"""))
+    }
+}

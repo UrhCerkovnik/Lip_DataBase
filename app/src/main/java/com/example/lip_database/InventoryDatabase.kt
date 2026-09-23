@@ -26,6 +26,24 @@ data class CatalogItem(
     val smNumber: String,
 )
 
+data class StockRecord(val inventoryName: String, val itemId: String, val quantity: Int)
+
+data class MovementRecord(
+    val cloudId: String,
+    val inventoryName: String,
+    val itemId: String,
+    val quantity: Int,
+    val action: String,
+    val occurredAt: Long,
+)
+
+data class InventorySnapshot(
+    val inventories: List<Inventory>,
+    val catalogItems: List<CatalogItem>,
+    val stock: List<StockRecord>,
+    val movements: List<MovementRecord>,
+)
+
 class InventoryDatabase(context: Context) :
     SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
@@ -70,6 +88,11 @@ class InventoryDatabase(context: Context) :
         }
         if (oldVersion < 3) {
             createStockMovementsTable(database)
+        }
+        if (oldVersion < 4) {
+            database.execSQL("ALTER TABLE stock_movements ADD COLUMN cloud_id TEXT")
+            database.execSQL("UPDATE stock_movements SET cloud_id = 'legacy-' || id WHERE cloud_id IS NULL")
+            database.execSQL("CREATE UNIQUE INDEX stock_movements_cloud_id ON stock_movements(cloud_id)")
         }
     }
 
@@ -237,6 +260,7 @@ class InventoryDatabase(context: Context) :
                     )
                 }
                 database.insertOrThrow("stock_movements", null, ContentValues().apply {
+                    put("cloud_id", java.util.UUID.randomUUID().toString())
                     put("inventory_id", inventoryId)
                     put("item_id", itemId)
                     put("quantity", quantity)
@@ -251,9 +275,96 @@ class InventoryDatabase(context: Context) :
         }
     }
 
+    fun snapshot(): InventorySnapshot {
+        val inventories = inventories()
+        val catalog = catalogItems()
+        val stock = readableDatabase.rawQuery(
+            """
+            SELECT inventories.name, stock.item_id, stock.quantity
+            FROM stock JOIN inventories ON inventories.id = stock.inventory_id
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(StockRecord(cursor.getString(0), cursor.getString(1), cursor.getInt(2)))
+            }
+        }
+        val movements = readableDatabase.rawQuery(
+            """
+            SELECT m.cloud_id, inventories.name, m.item_id, m.quantity, m.action, m.occurred_at
+            FROM stock_movements m JOIN inventories ON inventories.id = m.inventory_id
+            WHERE m.cloud_id IS NOT NULL
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) {
+                    add(MovementRecord(
+                        cursor.getString(0),
+                        cursor.getString(1),
+                        cursor.getString(2),
+                        cursor.getInt(3),
+                        cursor.getString(4),
+                        cursor.getLong(5),
+                    ))
+                }
+            }
+        }
+        return InventorySnapshot(inventories, catalog, stock, movements)
+    }
+
+    /** Remote stock is authoritative for records it contains; local-only records stay intact. */
+    fun mergeRemote(
+        remoteCatalog: List<CatalogItem>,
+        remoteInventories: List<String>,
+        remoteStock: List<StockRecord>,
+        remoteMovements: List<MovementRecord>,
+    ) {
+        val database = writableDatabase
+        database.beginTransaction()
+        try {
+            remoteInventories.forEach { name ->
+                database.insertWithOnConflict(
+                    "inventories", null, ContentValues().apply { put("name", name) }, SQLiteDatabase.CONFLICT_IGNORE,
+                )
+            }
+            remoteCatalog.forEach { item ->
+                database.insertWithOnConflict("items", null, ContentValues().apply {
+                    put("id", item.id)
+                    put("name", item.name)
+                    put("weight_kg", item.weightKg)
+                    put("origin", item.storage)
+                    put("sm_number", item.smNumber)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            remoteStock.forEach { record ->
+                val inventoryId = inventoryId(database, record.inventoryName) ?: return@forEach
+                database.insertWithOnConflict("stock", null, ContentValues().apply {
+                    put("inventory_id", inventoryId)
+                    put("item_id", record.itemId)
+                    put("quantity", record.quantity)
+                }, SQLiteDatabase.CONFLICT_REPLACE)
+            }
+            remoteMovements.forEach { movement ->
+                val inventoryId = inventoryId(database, movement.inventoryName) ?: return@forEach
+                database.insertWithOnConflict("stock_movements", null, ContentValues().apply {
+                    put("cloud_id", movement.cloudId)
+                    put("inventory_id", inventoryId)
+                    put("item_id", movement.itemId)
+                    put("quantity", movement.quantity)
+                    put("action", movement.action)
+                    put("occurred_at", movement.occurredAt)
+                }, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            database.endTransaction()
+        }
+    }
+
     companion object {
         private const val DATABASE_NAME = "inventory.db"
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
         private const val ACTION_ADD = "ADD"
         private const val ACTION_REMOVE = "REMOVE"
 
@@ -262,6 +373,7 @@ class InventoryDatabase(context: Context) :
                 """
                 CREATE TABLE stock_movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cloud_id TEXT UNIQUE,
                     inventory_id INTEGER NOT NULL,
                     item_id TEXT NOT NULL,
                     quantity INTEGER NOT NULL,
@@ -276,5 +388,10 @@ class InventoryDatabase(context: Context) :
 
         fun inventoryName(storage: String, smNumber: String): String =
             "${storage.trim()} - ${smNumber.trim()}"
+
+        private fun inventoryId(database: SQLiteDatabase, name: String): Long? =
+            database.rawQuery("SELECT id FROM inventories WHERE name = ?", arrayOf(name)).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getLong(0) else null
+            }
     }
 }
