@@ -65,6 +65,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -283,7 +284,12 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
 
     Text(if (isAddition) "Add items" else "Remove items", style = MaterialTheme.typography.headlineSmall)
     Spacer(Modifier.height(12.dp))
-    Box(modifier = Modifier.fillMaxWidth().aspectRatio(1f)) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clipToBounds(),
+    ) {
         if (cameraPermissionGranted) {
             CameraScanner(
                 onCode = { code -> pending[code] = (pending[code] ?: 0) + 1 },
@@ -321,25 +327,37 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
     }
     cameraMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     Spacer(Modifier.height(12.dp))
-    Text("Items waiting for confirmation", style = MaterialTheme.typography.titleMedium)
-    LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
-        items(pending.keys.toList(), key = { it }) { itemId ->
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                val item = catalogById[itemId]
+    Card(modifier = Modifier.weight(1f).fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxSize().padding(12.dp)) {
+            Text("Items waiting for confirmation", style = MaterialTheme.typography.titleMedium)
+            if (pending.isEmpty()) {
                 Text(
-                    text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
-                    modifier = Modifier.weight(1f),
+                    "Scan a QR code to add an item.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 8.dp),
                 )
-                OutlinedTextField(
-                    value = pending[itemId].toString(),
-                    onValueChange = { value -> value.toIntOrNull()?.let { pending[itemId] = it } },
-                    label = { Text("Qty") },
-                    modifier = Modifier.width(96.dp),
-                    singleLine = true,
-                )
-                TextButton(onClick = { pending.remove(itemId) }) { Text("Remove") }
+            } else {
+                LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    items(pending.keys.toList(), key = { it }) { itemId ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            val item = catalogById[itemId]
+                            Text(
+                                text = item?.let { "${it.name} - ${it.storage}" } ?: "Unknown QR item",
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedTextField(
+                                value = pending[itemId].toString(),
+                                onValueChange = { value -> value.toIntOrNull()?.let { pending[itemId] = it } },
+                                label = { Text("Qty") },
+                                modifier = Modifier.width(96.dp),
+                                singleLine = true,
+                            )
+                            TextButton(onClick = { pending.remove(itemId) }) { Text("Remove") }
+                        }
+                        HorizontalDivider()
+                    }
+                }
             }
-            HorizontalDivider()
         }
     }
     Row(
@@ -552,7 +570,11 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val latestOnCode by rememberUpdatedState(onCode)
-    val previewView = remember { PreviewView(context) }
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+    }
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val nextScanAllowedAt = remember { AtomicLong(0) }
@@ -596,7 +618,7 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
             cameraExecutor.shutdown()
         }
     }
-    AndroidView(factory = { previewView }, modifier = modifier)
+    AndroidView(factory = { previewView }, modifier = modifier.clipToBounds())
 }
 
 private const val SCAN_COOLDOWN_MILLIS = 1_000L
