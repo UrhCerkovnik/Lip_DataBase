@@ -8,6 +8,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
@@ -721,6 +722,11 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
     val cameraProviderFuture = remember { ProcessCameraProvider.getInstance(context) }
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     val nextScanAllowedAt = remember { AtomicLong(0) }
+    val scanBeep = remember { MediaPlayer.create(context, R.raw.scan_beep) }
+
+    DisposableEffect(scanBeep) {
+        onDispose { scanBeep.release() }
+    }
 
     DisposableEffect(lifecycleOwner) {
         val setupCamera = Runnable {
@@ -745,6 +751,7 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
                                 if (now >= nextAllowed &&
                                     nextScanAllowedAt.compareAndSet(nextAllowed, now + SCAN_COOLDOWN_MILLIS)
                                 ) {
+                                    scanBeep.start()
                                     latestOnCode(value)
                                 }
                             }
@@ -764,4 +771,4 @@ private fun CameraScanner(onCode: (String) -> Unit, modifier: Modifier = Modifie
     AndroidView(factory = { previewView }, modifier = modifier.clipToBounds())
 }
 
-private const val SCAN_COOLDOWN_MILLIS = 1_000L
+private const val SCAN_COOLDOWN_MILLIS = 2_000L
