@@ -136,7 +136,7 @@ private class InventoryViewModel(context: Context) : ViewModel() {
         refresh()
     }
 
-    fun createItem(name: String, storage: String, smNumber: String, weightText: String) {
+    fun createItem(name: String, itemCode: String, storage: String, smNumber: String, weightText: String) {
         if (!hasAccessTo(smNumber.trim())) {
             state = state.copy(message = "This PIN only allows SM ${state.cloud.unlockedSmNumber}.")
             return
@@ -147,7 +147,7 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             return
         }
         viewModelScope.launch {
-            val error = withContext(Dispatchers.IO) { database.addItem(name, storage, smNumber, weight) }
+            val error = withContext(Dispatchers.IO) { database.addItem(name, itemCode, storage, smNumber, weight) }
             if (error == null) {
                 state = state.copy(
                     message = if (smNumber.isBlank()) {
@@ -622,7 +622,7 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
             Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(item.name, style = MaterialTheme.typography.titleMedium)
-                    Text("${item.storage} • ${item.smNumber} • ${item.weightKg} kg")
+                    Text("${item.itemCode} • ${item.storage} • ${item.smNumber} • ${item.weightKg} kg")
                     Row {
                         TextButton(onClick = { selectedItem = item }) { Text("Make QR sticker") }
                         TextButton(onClick = { viewModel.deleteItem(item.id) }) { Text("Delete") }
@@ -634,8 +634,8 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
     if (addingItem) {
         AddItemDialog(
             onDismiss = { addingItem = false },
-            onConfirm = { name, storage, smNumber, weight ->
-                viewModel.createItem(name, storage, smNumber, weight)
+            onConfirm = { name, itemCode, storage, smNumber, weight ->
+                viewModel.createItem(name, itemCode, storage, smNumber, weight)
                 addingItem = false
             },
         )
@@ -646,9 +646,10 @@ private fun ColumnScope.StickersScreen(state: InventoryUiState, viewModel: Inven
 @Composable
 private fun AddItemDialog(
     onDismiss: () -> Unit,
-    onConfirm: (name: String, storage: String, smNumber: String, weight: String) -> Unit,
+    onConfirm: (name: String, itemCode: String, storage: String, smNumber: String, weight: String) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
+    var itemCode by remember { mutableStateOf("") }
     var storage by remember { mutableStateOf("") }
     var smNumber by remember { mutableStateOf("") }
     var weight by remember { mutableStateOf("") }
@@ -658,12 +659,18 @@ private fun AddItemDialog(
         text = {
             Column {
                 OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(
+                    itemCode,
+                    { itemCode = it.filter(Char::isDigit).take(6) },
+                    label = { Text("Šifra (6 digits)") },
+                    singleLine = true,
+                )
                 OutlinedTextField(storage, { storage = it }, label = { Text("Storage name") }, singleLine = true)
                 OutlinedTextField(smNumber, { smNumber = it }, label = { Text("SM number") }, singleLine = true)
                 OutlinedTextField(weight, { weight = it }, label = { Text("Weight per unit (kg)") }, singleLine = true)
             }
         },
-        confirmButton = { TextButton(onClick = { onConfirm(name, storage, smNumber, weight) }) { Text("Add") } },
+        confirmButton = { TextButton(onClick = { onConfirm(name, itemCode, storage, smNumber, weight) }) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
@@ -707,20 +714,22 @@ private fun createStickerBitmap(item: CatalogItem): Bitmap {
         typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD)
     }
     val qr = createQrBitmap(item.id, 320)
-    canvas.drawBitmap(qr, (width - qr.width) / 2f, 35f, null)
+    canvas.drawBitmap(qr, 70f, 35f, null)
 
     centeredPaint.textSize = 90f
-    canvas.drawText(item.name.uppercase(), width / 2f, 465f, centeredPaint)
+    canvas.drawText(item.name.uppercase(), 790f, 230f, centeredPaint)
     centeredPaint.textSize = 48f
-    canvas.drawText(item.storage.uppercase(), width / 2f, 535f, centeredPaint)
+    canvas.drawText(item.storage.uppercase(), 790f, 310f, centeredPaint)
+    centeredPaint.textSize = 68f
+    canvas.drawText(item.itemCode, 790f, 400f, centeredPaint)
 
     val cornerPaint = Paint(centeredPaint).apply {
         textAlign = Paint.Align.LEFT
         textSize = 38f
     }
-    canvas.drawText(item.smNumber.uppercase(), 70f, 610f, cornerPaint)
+    canvas.drawText(item.smNumber.uppercase(), 70f, 655f, cornerPaint)
     cornerPaint.textAlign = Paint.Align.RIGHT
-    canvas.drawText("Datum:__________________", width - 70f, 610f, cornerPaint)
+    canvas.drawText("Datum:__________________", width - 70f, 655f, cornerPaint)
     return sticker
 }
 

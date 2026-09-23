@@ -181,6 +181,7 @@ class CloudSyncManager(
             CatalogItem(
                 id,
                 document.getString("name") ?: return@mapNotNull null,
+                document.getString("itemCode") ?: "",
                 document.getDouble("weightKg") ?: 0.0,
                 document.getString("storage") ?: "",
                 document.getString("smNumber") ?: "",
@@ -210,7 +211,7 @@ class CloudSyncManager(
         batch.set(root, mapOf("updatedAt" to System.currentTimeMillis()), com.google.firebase.firestore.SetOptions.merge())
         snapshot.catalogItems.forEach { item ->
             batch.set(root.collection("catalog").document(item.id), mapOf(
-                "id" to item.id, "name" to item.name, "weightKg" to item.weightKg,
+                "id" to item.id, "name" to item.name, "itemCode" to item.itemCode, "weightKg" to item.weightKg,
                 "storage" to item.storage, "smNumber" to item.smNumber,
             ))
         }

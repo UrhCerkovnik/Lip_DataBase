@@ -21,6 +21,7 @@ data class InventoryItem(
 data class CatalogItem(
     val id: String,
     val name: String,
+    val itemCode: String,
     val weightKg: Double,
     val storage: String,
     val smNumber: String,
@@ -63,7 +64,8 @@ class InventoryDatabase(context: Context) :
                 name TEXT NOT NULL,
                 weight_kg REAL NOT NULL,
                 origin TEXT NOT NULL,
-                sm_number TEXT NOT NULL
+                sm_number TEXT NOT NULL,
+                item_code TEXT NOT NULL
             )
             """.trimIndent(),
         )
@@ -94,6 +96,9 @@ class InventoryDatabase(context: Context) :
             database.execSQL("UPDATE stock_movements SET cloud_id = 'legacy-' || id WHERE cloud_id IS NULL")
             database.execSQL("CREATE UNIQUE INDEX stock_movements_cloud_id ON stock_movements(cloud_id)")
         }
+        if (oldVersion < 5) {
+            database.execSQL("ALTER TABLE items ADD COLUMN item_code TEXT NOT NULL DEFAULT ''")
+        }
     }
 
     fun inventories(): List<Inventory> = readableDatabase.rawQuery(
@@ -106,7 +111,7 @@ class InventoryDatabase(context: Context) :
     }
 
     fun catalogItems(): List<CatalogItem> = readableDatabase.rawQuery(
-        "SELECT id, name, weight_kg, origin, sm_number FROM items ORDER BY name COLLATE NOCASE",
+        "SELECT id, name, item_code, weight_kg, origin, sm_number FROM items ORDER BY name COLLATE NOCASE",
         null,
     ).use { cursor ->
         buildList {
@@ -115,9 +120,10 @@ class InventoryDatabase(context: Context) :
                     CatalogItem(
                         cursor.getString(0),
                         cursor.getString(1),
-                        cursor.getDouble(2),
-                        cursor.getString(3),
+                        cursor.getString(2),
+                        cursor.getDouble(3),
                         cursor.getString(4),
+                        cursor.getString(5),
                     ),
                 )
             }
@@ -177,11 +183,13 @@ class InventoryDatabase(context: Context) :
         }
     }
 
-    fun addItem(name: String, storage: String, smNumber: String, weightKg: Double): String? {
+    fun addItem(name: String, itemCode: String, storage: String, smNumber: String, weightKg: Double): String? {
         if (name.isBlank() || storage.isBlank()) {
             return "Name and storage are required."
         }
         if (weightKg < 0) return "Weight cannot be negative."
+        val normalizedItemCode = itemCode.filter(Char::isDigit)
+        if (normalizedItemCode.length != 6) return "Šifra must contain exactly six digits."
         val itemId = ItemIdGenerator.create(name, storage, smNumber, weightKg)
         val inventoryName = inventoryName(storage, smNumber)
         val database = writableDatabase
@@ -201,6 +209,7 @@ class InventoryDatabase(context: Context) :
                 put("weight_kg", weightKg)
                 put("origin", storage.trim())
                 put("sm_number", smNumber.trim())
+                put("item_code", normalizedItemCode)
             })
             database.setTransactionSuccessful()
             null
@@ -344,6 +353,7 @@ class InventoryDatabase(context: Context) :
                 database.insertWithOnConflict("items", null, ContentValues().apply {
                     put("id", item.id)
                     put("name", item.name)
+                    put("item_code", item.itemCode)
                     put("weight_kg", item.weightKg)
                     put("origin", item.storage)
                     put("sm_number", item.smNumber)
@@ -376,7 +386,7 @@ class InventoryDatabase(context: Context) :
 
     companion object {
         private const val DATABASE_NAME = "inventory.db"
-        private const val DATABASE_VERSION = 4
+        private const val DATABASE_VERSION = 5
         private const val ACTION_ADD = "ADD"
         private const val ACTION_REMOVE = "REMOVE"
 
