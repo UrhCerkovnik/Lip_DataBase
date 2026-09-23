@@ -725,9 +725,11 @@ private fun createStickerBitmap(item: CatalogItem): Bitmap {
 
     val cornerPaint = Paint(centeredPaint).apply {
         textAlign = Paint.Align.LEFT
-        textSize = 38f
+        textSize = 46f
     }
-    canvas.drawText(item.smNumber.uppercase(), 70f, 655f, cornerPaint)
+    if (item.smNumber.isNotBlank()) {
+        canvas.drawText("SM ${item.smNumber.uppercase()}", 70f, 655f, cornerPaint)
+    }
     cornerPaint.textAlign = Paint.Align.RIGHT
     canvas.drawText("Datum:__________________", width - 70f, 655f, cornerPaint)
     return sticker
