@@ -178,8 +178,8 @@ class InventoryDatabase(context: Context) :
     }
 
     fun addItem(name: String, storage: String, smNumber: String, weightKg: Double): String? {
-        if (name.isBlank() || storage.isBlank() || smNumber.isBlank()) {
-            return "Name, storage, and SM number are required."
+        if (name.isBlank() || storage.isBlank()) {
+            return "Name and storage are required."
         }
         if (weightKg < 0) return "Weight cannot be negative."
         val itemId = ItemIdGenerator.create(name, storage, smNumber, weightKg)
@@ -187,12 +187,14 @@ class InventoryDatabase(context: Context) :
         val database = writableDatabase
         database.beginTransaction()
         return try {
-            database.insertWithOnConflict(
-                "inventories",
-                null,
-                ContentValues().apply { put("name", inventoryName) },
-                SQLiteDatabase.CONFLICT_IGNORE,
-            )
+            if (smNumber.isNotBlank()) {
+                database.insertWithOnConflict(
+                    "inventories",
+                    null,
+                    ContentValues().apply { put("name", inventoryName) },
+                    SQLiteDatabase.CONFLICT_IGNORE,
+                )
+            }
             database.insertOrThrow("items", null, ContentValues().apply {
                 put("id", itemId)
                 put("name", name.trim())
@@ -216,6 +218,16 @@ class InventoryDatabase(context: Context) :
         ).use { cursor -> cursor.moveToFirst(); cursor.getInt(0) > 0 }
         if (inStock) return "Remove this item from every inventory before deleting it."
         writableDatabase.delete("items", "id = ?", arrayOf(id))
+        return null
+    }
+
+    fun deleteEmptyInventory(inventoryId: Long): String? {
+        val hasStock = readableDatabase.rawQuery(
+            "SELECT 1 FROM stock WHERE inventory_id = ? AND quantity > 0 LIMIT 1",
+            arrayOf(inventoryId.toString()),
+        ).use { it.moveToFirst() }
+        if (hasStock) return "Only empty inventories can be deleted."
+        writableDatabase.delete("inventories", "id = ?", arrayOf(inventoryId.toString()))
         return null
     }
 

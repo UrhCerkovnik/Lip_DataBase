@@ -150,7 +150,11 @@ private class InventoryViewModel(context: Context) : ViewModel() {
             val error = withContext(Dispatchers.IO) { database.addItem(name, storage, smNumber, weight) }
             if (error == null) {
                 state = state.copy(
-                    message = "Item added. ${InventoryDatabase.inventoryName(storage, smNumber)} is ready to use.",
+                    message = if (smNumber.isBlank()) {
+                        "General item added. It can be used in any inventory."
+                    } else {
+                        "Item added. ${InventoryDatabase.inventoryName(storage, smNumber)} is ready to use."
+                    },
                 )
                 refresh()
                 cloudSync.publishLocalChanges()
@@ -167,6 +171,19 @@ private class InventoryViewModel(context: Context) : ViewModel() {
                 state = state.copy(message = "Item deleted.")
                 refresh()
                 cloudSync.publishLocalChanges()
+            } else {
+                state = state.copy(message = error)
+            }
+        }
+    }
+
+    fun deleteEmptyInventory(inventoryId: Long) {
+        viewModelScope.launch {
+            val error = withContext(Dispatchers.IO) { database.deleteEmptyInventory(inventoryId) }
+            if (error == null) {
+                state = state.copy(message = "Empty inventory deleted.")
+                cloudSync.publishLocalChanges()
+                refresh()
             } else {
                 state = state.copy(message = error)
             }
@@ -198,7 +215,10 @@ private class InventoryViewModel(context: Context) : ViewModel() {
 
     fun hasAccessTo(smNumber: String): Boolean =
         !state.cloud.isLocked &&
-            (state.cloud.isMasterUnlocked || state.cloud.unlockedSmNumber == null || state.cloud.unlockedSmNumber == smNumber)
+            (smNumber.isBlank() ||
+                state.cloud.isMasterUnlocked ||
+                state.cloud.unlockedSmNumber == null ||
+                state.cloud.unlockedSmNumber == smNumber)
 
     private fun refresh() {
         viewModelScope.launch {
@@ -433,6 +453,8 @@ private fun ColumnScope.OperationScreen(state: InventoryUiState, viewModel: Inve
 private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: InventoryViewModel) {
     val context = LocalContext.current
     var exportMessage by remember { mutableStateOf<String?>(null) }
+    var firstDeleteConfirmation by remember { mutableStateOf<Inventory?>(null) }
+    var finalDeleteConfirmation by remember { mutableStateOf<Inventory?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("text/csv"),
     ) { uri ->
@@ -474,12 +496,45 @@ private fun ColumnScope.InventoriesScreen(state: InventoryUiState, viewModel: In
                         ) {
                             Text("Export for Excel")
                         }
+                        if (state.cloud.isMasterUnlocked && state.selectedStock.isEmpty()) {
+                            TextButton(onClick = { firstDeleteConfirmation = inventory }) {
+                                Text("Delete empty inventory")
+                            }
+                        }
                     }
                 }
             }
         }
     }
     exportMessage?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
+    firstDeleteConfirmation?.let { inventory ->
+        AlertDialog(
+            onDismissRequest = { firstDeleteConfirmation = null },
+            title = { Text("Delete ${inventory.name}?") },
+            text = { Text("This inventory is empty. Continue to the final confirmation?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    firstDeleteConfirmation = null
+                    finalDeleteConfirmation = inventory
+                }) { Text("Continue") }
+            },
+            dismissButton = { TextButton(onClick = { firstDeleteConfirmation = null }) { Text("Cancel") } },
+        )
+    }
+    finalDeleteConfirmation?.let { inventory ->
+        AlertDialog(
+            onDismissRequest = { finalDeleteConfirmation = null },
+            title = { Text("Permanently delete inventory?") },
+            text = { Text("This cannot be undone.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteEmptyInventory(inventory.id)
+                    finalDeleteConfirmation = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { finalDeleteConfirmation = null }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
