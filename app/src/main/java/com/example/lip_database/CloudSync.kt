@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -47,6 +48,7 @@ class CloudSyncManager(
                 refreshSettings()
                 synchronize()
                 listenForRemoteChanges()
+                startPeriodicSync()
                 setState { it.copy(status = "Cloud sync active") }
             } catch (error: Exception) {
                 setState { it.copy(status = "Cloud sync unavailable: ${error.message ?: "check connection"}") }
@@ -61,6 +63,21 @@ class CloudSyncManager(
                 setState { it.copy(status = "Cloud sync active") }
             } catch (error: Exception) {
                 setState { it.copy(status = "Sync failed: ${error.message ?: "check connection"}") }
+            }
+        }
+    }
+
+    private fun startPeriodicSync() {
+        if (syncJob?.isActive == true) return
+        syncJob = scope.launch {
+            while (true) {
+                delay(PERIODIC_SYNC_MILLIS)
+                try {
+                    synchronize()
+                    setState { it.copy(status = "Cloud sync active") }
+                } catch (_: Exception) {
+                    setState { it.copy(status = "Cloud sync will retry automatically.") }
+                }
             }
         }
     }
@@ -279,6 +296,7 @@ class CloudSyncManager(
     companion object {
         private const val COMPANY_WORKSPACE_ID = "lip-database-company"
         private const val DEFAULT_MASTER_PIN = "0000"
+        private const val PERIODIC_SYNC_MILLIS = 10_000L
 
         internal fun hashPin(pin: String): String =
             MessageDigest.getInstance("SHA-256").digest(pin.toByteArray()).joinToString("") { "%02x".format(it) }

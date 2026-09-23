@@ -242,8 +242,13 @@ private fun InventoryApp(viewModel: InventoryViewModel) {
     var selectedTab by remember { mutableStateOf(AppTab.ADD) }
     val state = viewModel.state
     if (state.cloud.isLocked) {
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-            SyncScreen(state, viewModel)
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+                SyncScreen(state, viewModel)
+            }
         }
         return
     }
